@@ -266,6 +266,7 @@ function montarFiltros() {
     <button class="fx-btn ${nSup ? "on" : ""}" data-pop="sup">Supervisor ${nSup ? `<span class="n">${nSup}</span>` : ""}${IC.seta}</button>
     <button class="fx-btn ${nRca ? "on" : ""}" data-pop="rca">RCA ${nRca ? `<span class="n">${nRca}</span>` : ""}${IC.seta}</button>
     <button class="fx-btn ${cid ? "on" : ""}" data-pop="cidade">${cid ? esc(cid.nome) : "Cidade"} ${IC.seta}</button>
+    <button class="fx-btn ${S.bairro != null ? "on" : ""}" data-pop="bairro" title="${cid ? "Bairros de " + esc(cid.nome) : "Bairros de todos os municípios (escolher um abre o município)"}">${S.bairro != null ? esc(titulo(S.bairro)) : "Bairro"} ${IC.seta}</button>
     <span class="fx-sep"></span>
     <span class="fx-rot" title="Quem conta como cliente da base, além de quem comprou no período">Base</span>
     <span class="seg" id="seg-base">
@@ -290,6 +291,22 @@ function ligarFiltros() {
     if (b.dataset.pop === "rca") return abrirPop(b, { itens: D.rca.filter((r) => !S.sup.size || S.sup.has(r[2])).map(([k, t]) => ({ k, t: k + " · " + t })), sel: S.rca, aoMudar: refazer });
     if (b.dataset.pop === "cidade") return abrirPop(b, { unico: true, itens: [...CID.values()].map((c) => ({ k: c.ibge, t: c.nome, n: R.cid.get(c.ibge).cli })),
       sel: new Set(S.cidade != null ? [S.cidade] : []), aoMudar: (sel) => { const k = [...sel][0]; k == null ? voltarEstado() : abrirCidade(k); } });
+    if (b.dataset.pop === "bairro") {
+      // Bairro só existe dentro de um município (o mesmo nome se repete em cidades diferentes): a chave é "ibge|bairro".
+      // Com um município aberto, a lista é a dos bairros dele; sem município, a de todos, com o nome da cidade ao lado.
+      const itens = [];
+      const doMun = (c, comCidade) => { for (const x of c.bairros.values()) itens.push({ k: c.ibge + "|" + x.nome, t: titulo(x.nome) + (comCidade ? " · " + c.nome : ""), n: x.cli }); };
+      if (S.cidade != null) doMun(R.cid.get(S.cidade), false); else for (const c of R.cid.values()) doMun(c, true);
+      itens.sort((a, z) => a.t.localeCompare(z.t, "pt-BR"));
+      return abrirPop(b, { unico: true, rotLimpar: "Todos", itens, sel: new Set(S.bairro != null ? [S.cidade + "|" + S.bairro] : []),
+        aoMudar: (sel) => {
+          const k = [...sel][0];
+          if (k == null) { if (S.bairro != null) abrirBairro(null); return; }
+          const p = String(k).indexOf("|"), ib = +String(k).slice(0, p), nome = String(k).slice(p + 1);
+          if (S.cidade !== ib) abrirCidade(ib);
+          abrirBairro(nome);
+        } });
+    }
   });
   fx.addEventListener("change", (e) => {
     if ((e.target.id !== "f-d0" && e.target.id !== "f-d1") || !e.target.value) return;
@@ -309,12 +326,13 @@ function abrirPop(btn, o) {
   popAberto = btn;
   const desenhar = (q) => {
     const lista = o.itens.filter((it) => !q || sem(it.t).includes(q));
-    $(".pp-lista", pop).innerHTML = lista.slice(0, 400).map((it) => `<button class="pp-item ${o.sel.has(it.k) ? "on" : ""}" data-k="${it.k}">
+    $(".pp-lista", pop).innerHTML = (lista.slice(0, 400).map((it) => `<button class="pp-item ${o.sel.has(it.k) ? "on" : ""}" data-k="${esc(it.k)}">
       <span class="cx">${o.sel.has(it.k) ? "✓" : ""}</span><span>${marcar(it.t, q)}</span>${it.n != null ? `<small>${inteiro(it.n)}</small>` : ""}</button>`).join("")
-      || `<div class="vazio">Nada encontrado</div>`;
+      || `<div class="vazio">Nada encontrado</div>`)
+      + (lista.length > 400 ? `<div class="vazio">Mostrando 400 de ${inteiro(lista.length)}: digite para achar</div>` : "");
   };
   pop.innerHTML = `<div class="pp-topo"><input type="search" placeholder="Buscar…" autocomplete="off" spellcheck="false"></div>
-    <div class="pp-lista"></div><div class="pp-pe"><button class="mini-btn" data-a="limpar">${o.unico ? "Todas" : "Limpar"}</button><button class="mini-btn ativo" data-a="ok">Fechar</button></div>`;
+    <div class="pp-lista"></div><div class="pp-pe"><button class="mini-btn" data-a="limpar">${o.rotLimpar || (o.unico ? "Todas" : "Limpar")}</button><button class="mini-btn ativo" data-a="ok">Fechar</button></div>`;
   desenhar("");
   const r = btn.getBoundingClientRect();
   pop.style.left = Math.max(8, Math.min(innerWidth - 328, r.left)) + "px"; pop.style.top = r.bottom + 6 + "px";
@@ -574,7 +592,7 @@ function abrirBairro(nome) {
     else toast("Os clientes deste bairro estão sem ponto no mapa: veja a lista ao lado.");
     if (S.camada !== "clientes") S.camada = "clientes";
   } else mapa.flyToBounds(camada.get(S.cidade).getBounds(), { padding: [34, 34], duration: calmo ? 0 : 0.8 });
-  desenharKpis(); desenharTopoMapa(); desenharLegenda(); desenharPontos(); desenharLado(); desenharLista();
+  montarFiltros(); desenharKpis(); desenharTopoMapa(); desenharLegenda(); desenharPontos(); desenharLado(); desenharLista();
 }
 function cartaoCliente(i) {
   const com = R.comprou[i], r = C.rca[i];
