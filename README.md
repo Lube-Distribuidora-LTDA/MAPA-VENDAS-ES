@@ -46,7 +46,8 @@ um cliente pode ter faturado sem venda no período (pedido do mês anterior) e o
   cliente como um ponto, **verde = com venda** (tamanho = valor), **vermelho = sem venda**. Botão Bairros: uma bolha por
   bairro (com venda / clientes). O clique no bairro abre os clientes dele; o clique no cliente abre o cartão dele.
 - Painel ao lado: municípios → bairros → clientes. Lista embaixo, com busca, ordenação e Excel.
-- Filtros: período, supervisor, RCA, cidade, base de clientes.
+- Filtros: período, supervisor, RCA, cidade, bairro (sem município aberto, todos os bairros com a cidade ao lado;
+  escolher abre o município e o bairro), base de clientes.
 
 ## Outras regras
 - **Base** (quem pode aparecer "sem venda") = aptos a comprar (sem bloqueio, com limite de crédito, sem bloqueio na
