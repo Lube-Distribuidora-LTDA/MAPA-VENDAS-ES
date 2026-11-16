@@ -1,0 +1,8 @@
+node_modules/
+ENV
+.env*
+*.log
+__pycache__/
+.vercel/
+web/dados/mapa.json
+conferencia/conferir_power_bi.py
