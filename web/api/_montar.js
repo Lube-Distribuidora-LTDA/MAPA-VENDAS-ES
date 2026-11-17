@@ -11,14 +11,14 @@ const fs = require("fs");
 const path = require("path");
 
 const BASE_DIA = "2025-01-01";
-let MALHA = null;
-function malha() {
-  if (MALHA) return MALHA;
-  const g = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "dados", "es_municipios.json"), "utf8"));
-  MALHA = new Map();
+const MALHAS = new Map();                         // uf -> Map(ibge -> { polis, caixa })
+function malha(uf) {
+  if (MALHAS.has(uf)) return MALHAS.get(uf);
+  const g = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "dados", uf.toLowerCase() + "_municipios.json"), "utf8"));
+  const MALHA = new Map(); MALHAS.set(uf, MALHA);
   for (const f of g.features) {
     let polis = f.geometry.type === "MultiPolygon" ? f.geometry.coordinates : [f.geometry.coordinates];
-    const perto = polis.filter((p) => p[0][0][0] < -39);        // sem Trindade e Martim Vaz
+    const perto = polis.filter((p) => p[0][0][0] < -34);        // sem Trindade e Martim Vaz (de Vitória, a -29°); a costa da BA vai a -37°
     if (perto.length) polis = perto;
     let x0 = 1e9, y0 = 1e9, x1 = -1e9, y1 = -1e9;
     for (const p of polis) for (const [x, y] of p[0]) { if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; }
@@ -53,8 +53,9 @@ const r5 = (v) => Math.round(v * 1e5) / 1e5;
 /**
  * @param {object} b  o que o banco devolveu: clientes, venda, faturado (linhas em array), grupos, rcas, sups, hoje, lidoEm, cadastro
  */
-function montar(b) {
-  const M = malha();
+function montar(b, uf) {
+  uf = uf || "ES";
+  const M = malha(uf);
   const grupo = new Map(b.grupos.map((g) => [g[0], g[1] === "INTERNA" ? 1 : g[1] === "ES" || g[1] === "BA" || g[1] === "RJ" ? 0 : 2]));
   const g = (s) => (grupo.has(s) ? grupo.get(s) : 2);            // supervisor fora da tabela = outras equipes
   const comMovimento = new Set();
@@ -143,7 +144,7 @@ function montar(b) {
   const supDe = new Map(b.sups);
   return {
     geradoEm: b.lidoEm, cadastroEm: b.cadastro && b.cadastro.lido_em, cadastroStatus: b.cadastro && b.cadastro.status,
-    origem: "banco", baseDia: BASE_DIA, periodo: { ini: BASE_DIA, fim: b.hoje },
+    origem: "banco", uf, baseDia: BASE_DIA, periodo: { ini: BASE_DIA, fim: b.hoje },
     sup: [...usadosS].sort((p, q) => p - q).map((s) => [s, tx(supDe.get(s)) || "Supervisor " + s]),
     rca: [...usadosR].filter((r) => rcaDe.has(r)).sort((p, q) => p - q).map((r) => [r, tx(rcaDe.get(r)[1]), rcaDe.get(r)[2]]),
     cli, ven, fat, lugar: cont, fora, semCliente: { venda: perdV, faturado: perdF },

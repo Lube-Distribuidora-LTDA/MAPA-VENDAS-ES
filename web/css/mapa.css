@@ -167,3 +167,8 @@
 /* fornecedor / produto: a base muda (item de pedido faturado), e isso fica dito na faixa */
 .fx-aviso { flex-basis: 100%; font: 600 11.5px var(--f-txt); color: var(--atencao); padding: 2px 4px 0; cursor: help; }
 body.lendo-itens #kpis, body.lendo-itens .mapa-caixa, body.lendo-itens #lado, body.lendo-itens #sec-lista { opacity: .55; transition: opacity .2s; }
+
+/* visão geral ES e Bahia (2026-11-17): o nome do estado sobre o mapa */
+.rot-estado { font: 800 15px var(--f-tit); color: #fff; text-shadow: 0 1px 4px rgba(0,0,0,.95), 0 0 12px rgba(0,0,0,.7); white-space: nowrap; pointer-events: none; transform: translate(-50%, -50%); text-align: center; letter-spacing: .02em; text-transform: uppercase; }
+.rot-estado small { display: block; font: 700 12.5px var(--f-num); opacity: .92; text-transform: none; }
+:root[data-tema="claro"] .rot-estado { color: #0b1533; text-shadow: 0 0 5px #fff, 0 0 10px #fff; }

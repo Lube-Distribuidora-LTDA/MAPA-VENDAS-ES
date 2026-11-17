@@ -1,6 +1,9 @@
-# Mapa de Vendas ES — Lube Distribuidora (prévia)
+# Mapa de Vendas — ES e Bahia — Lube Distribuidora
 
 O painel "LUBE ES" (mapa de vendas do Espírito Santo) recriado com a identidade da Lube. Pedido do Júlio em 2026-11-16.
+**Bahia no mesmo mapa desde 2026-11-17** (Júlio: "divide apenas assim: ES e BAHIA; quando clicar vem um zoom e abre o
+mapa do estado"): a tela abre com os dois estados; o clique num deles abre o mapa dele. Link direto: `?uf=ES` ou `?uf=BA`.
+**Filtros Fornecedor e Produto desde 2026-11-17** (ver abaixo).
 **No ar desde 2026-11-16** em https://mapa-vendas-es.vercel.app, fechado pela Sentinela (só entra quem tem acesso pelo\nPainel Lube; cartão em COMERCIAL). Na máquina: `INICIAR.bat` (http://localhost:3115).
 
 ## Abrir
@@ -15,11 +18,19 @@ O painel "LUBE ES" (mapa de vendas do Espírito Santo) recriado com a identidade
 |---|---|---|
 | Venda | `relatorio146.pedido` | fluxos do Relatório 146 (segundos) |
 | Faturado | `comercial.fato_comissao_nf` | fluxos do Central Comercial |
-| Cadastro com bairro e coordenada | `mapa_vendas.cliente` (schema deste painel, `web/db/01-schema.sql`) | fluxo **`mapa_vendas.cliente`** (`22. AGENTE LUBE\2 - AGENTE\fluxos\mapa_vendas.toml`), de hora em hora |
+| Cadastro com bairro e coordenada (ES e BA) | `mapa_vendas.cliente` (schema deste painel, `web/db/01-schema.sql`) | fluxo **`mapa_vendas.cliente`** (`22. AGENTE LUBE\2 - AGENTE\fluxos\mapa_vendas.toml`), de hora em hora |
 
-`web/api/dados.js` lê as três numa transação só de leitura; `web/api/_montar.js` põe cada cliente no mapa (a mesma conta
+`web/api/dados.js?uf=ES|BA` lê as três numa transação só de leitura, um estado por vez (a venda por item dos filtros
+Fornecedor e Produto vem de `analise_comercial.venda` e `.devolucao`, por `web/api/itens.js`); `web/api/_montar.js` põe cada cliente no mapa (a mesma conta
 do `etl/extrair.py`). A senha do banco vem do arquivo ENV que o `servidor_local.js` carrega (só as `SUPABASE_DB_*`).
 Ver se o fluxo rodou: `select status, lido_em, linhas from agente.estado where fluxo = 'mapa_vendas.cliente'`.
+
+## Fornecedor e Produto (2026-11-17)
+A venda do Relatório 146 e a nota do Central Comercial são por pedido e por nota: não abrem por produto. Com fornecedor
+ou produto escolhido, a tela pede `web/api/itens.js` e usa a **mesma base da aba Fornecedor do app Supervisor Lube e da
+Análise Comercial**: venda = item de pedido **faturado** pela regra do 146 (sem ST, sem bonificação), pela data do
+pedido; no lugar do faturado, **líquido = venda − devolução sem ST**. A faixa de filtros avisa a troca. Conferido: COAMO
+(2181) no ES de 01 a 17/11/2026 igual à consulta direta no banco (valor e clientes).
 
 ## Operação interna
 Categoria à parte, na venda e no faturado (Júlio, 2026-11-16: "se ele quiser ver ele clica e aparece"): cartão roxo, fora
@@ -46,7 +57,7 @@ um cliente pode ter faturado sem venda no período (pedido do mês anterior) e o
   cliente como um ponto, **verde = com venda** (tamanho = valor), **vermelho = sem venda**. Botão Bairros: uma bolha por
   bairro (com venda / clientes). O clique no bairro abre os clientes dele; o clique no cliente abre o cartão dele.
 - Painel ao lado: municípios → bairros → clientes. Lista embaixo, com busca, ordenação e Excel.
-- Filtros: período, supervisor, RCA, cidade, bairro (sem município aberto, todos os bairros com a cidade ao lado;
+- Filtros: período, supervisor, RCA, cidade, fornecedor, produto, bairro (sem município aberto, todos os bairros com a cidade ao lado;
   escolher abre o município e o bairro), base de clientes.
 
 ## Outras regras

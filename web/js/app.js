@@ -1,5 +1,7 @@
 /* =============================================================================
- * Mapa de Vendas ES — prévia (2026-11-16), pedida pelo Júlio: o "LUBE ES" recriado com a identidade da Lube.
+ * Mapa de Vendas — ES e Bahia. Pedido do Júlio: o "LUBE ES" recriado com a identidade da Lube (2026-11-16) e, desde
+ * 2026-11-17, a Bahia no mesmo mapa ("divide apenas assim: ES e BAHIA; quando clicar vem um zoom e abre o estado").
+ * A tela abre com os dois estados; o clique num deles dá o zoom e abre o mapa daquele estado (um pacote por estado).
  *   dados/es_municipios.json = malha e população do IBGE (etl/baixar_ibge.py)
  *   dados/mapa.json          = clientes do ES e venda por dia × cliente × RCA × supervisor (etl/extrair.py, só leitura)
  * Tudo se calcula aqui, no navegador. O clique no município abre o mapa nele e mostra, cliente a cliente e bairro a
@@ -55,12 +57,16 @@ function marcar(txt, q) {
 }
 
 /* ------------------------------------------------------------------ dados e estado */
-let D = null, C = null, V = null, FT = null, GEO = null;
+let D = null, C = null, V = null, FT = null;
+const NOMES_UF = { ES: "Espírito Santo", BA: "Bahia" }, UFS_ORDEM = ["ES", "BA"];
+const UFX = {};                                 // uf -> { D, GEO, CID, camada, cam, itl, erro }: o que cada estado já carregou
+let EST = null, RG = null;                      // contorno dos estados (visão geral) e os números de cada estado na visão geral
+const nomeUF = () => S.uf ? NOMES_UF[S.uf] : "ES e Bahia";
 let BASE = null, FIM = 0;                       // dia 0 e o último dia (hoje) em índice de dia
-const CID = new Map();                          // ibge -> { ibge, nome, pop, feicao, centro }
+let CID = new Map();                            // ibge -> { ibge, nome, pop, feicao, centro } (do estado aberto)
 const SUP_NOME = new Map(), RCA_NOME = new Map(), RCA_SUP = new Map();
 const S = {
-  d0: 0, d1: 0, rapido: "mes", sup: new Set(), rca: new Set(), forn: new Set(), prod: new Set(), base: "aptos",
+  uf: null, d0: 0, d1: 0, rapido: "mes", sup: new Set(), rca: new Set(), forn: new Set(), prod: new Set(), base: "aptos",
   cidade: null, bairro: null, metrica: "venda", camada: "clientes", ruas: true, interna: false,
   ordCid: "venda", ordBai: "sem", tbFiltro: "todos", tbBusca: "", tbOrd: "venda", tbDir: -1, tbPag: 0, tbTam: 50,
 };
@@ -68,7 +74,7 @@ let R = null;                                   // resultado do cálculo do reco
 /* Fornecedor e produto (Júlio, 2026-11-17): a venda do 146 e a nota do Central Comercial não abrem por produto. Com um
    deles escolhido, a tela pede ao banco (api/itens) a venda por item da MESMA base da aba Fornecedor do app Supervisor Lube
    e da Análise Comercial: item de pedido faturado (regra do 146, sem ST) e, no lugar do faturado, venda − devolução. */
-let ITL = null, ITL_PEDIDO = null;              // lista de fornecedores e produtos do estado
+let ITL = null, ITL_PEDIDO = null;              // lista de fornecedores e produtos do estado aberto
 let IT = null, IT_PEDIDO = null;                // { chave, cur: [linhas], ant: [linhas], perdido }
 const CIDX = new Map();                         // código do cliente -> índice no pacote
 const itemAtivo = () => S.forn.size > 0 || S.prod.size > 0;
@@ -167,8 +173,14 @@ function calcular() {
   }
   R = { venda, ped, comprou, uni, cid, fat, nfs, fora, foraF, vint, fint, temInt, soInt, dev };
 }
-function escopo() {                              // os números do recorte que está na tela: estado, município ou bairro
-  const o = { venda: 0, fat: 0, fora: 0, foraF: 0, ped: 0, nfs: 0, cli: 0, at: 0, bai: 0, baiAt: 0, pop: 0, vInt: 0, fInt: 0, nInt: 0, ids: null, nome: "Espírito Santo" };
+function escopo() {                              // visão geral: a soma dos estados; senão, o recorte do estado aberto
+  if (S.uf != null || !RG) return escopoUF();
+  const o = { venda: 0, fat: 0, fora: 0, foraF: 0, ped: 0, nfs: 0, cli: 0, at: 0, bai: 0, baiAt: 0, pop: 0, vInt: 0, fInt: 0, nInt: 0, ids: null, nome: "ES e Bahia" };
+  for (const uf in RG) for (const k in o) if (typeof o[k] === "number") o[k] += RG[uf].e[k];
+  return o;
+}
+function escopoUF() {                            // os números do recorte que está na tela: estado, município ou bairro
+  const o = { venda: 0, fat: 0, fora: 0, foraF: 0, ped: 0, nfs: 0, cli: 0, at: 0, bai: 0, baiAt: 0, pop: 0, vInt: 0, fInt: 0, nInt: 0, ids: null, nome: NOMES_UF[D.uf || "ES"] };
   const soma = (x) => { o.venda += x.venda; o.fat += x.fat; o.fora += x.fora; o.foraF += x.foraF; o.ped += x.ped; o.nfs += x.nfs; o.cli += x.cli; o.at += x.at;
     if (x.idsInt) { o.vInt += x.vInt; o.fInt += x.fInt; o.nInt += x.nInt; } };
   if (S.cidade != null) {
@@ -193,6 +205,7 @@ function escopo() {                              // os números do recorte que e
 }
 function trecho(d0, d1) {                        // venda e faturado de outro período no mesmo recorte (filtros e lugar), para comparar
   if (d1 < 0) return null;
+  if (S.uf == null && RG) { const t = { venda: 0, fat: 0 }; for (const uf in RG) if (RG[uf].ant) { t.venda += RG[uf].ant.venda; t.fat += RG[uf].ant.fat; } return t; }
   const fs = S.sup.size, fr = S.rca.size;
   if (itemAtivo()) {                               // o período de antes vem junto na leitura do fornecedor/produto
     if (!IT || IT.chave !== chaveItens()) return null;
@@ -283,7 +296,7 @@ function mostrarQuando() {                        // o horário verdadeiro do da
   $("#menu-rodape").innerHTML = `<div><span class="vivo" ${doBanco ? "" : 'style="background:var(--atencao)"'}></span><b>${doBanco ? "Ao vivo" : "Sem banco agora"}</b> · Agente Lube</div>
     <div>${doBanco ? "Venda e faturado: banco, " + hora(D.geradoEm) : "Cópia guardada de " + hora(D.geradoEm)}</div>
     ${doBanco ? `<div ${D.cadastroStatus && D.cadastroStatus !== "OK" ? 'style="color:var(--atencao)"' : ""}>Cadastro (Agente Lube): ${hora(D.cadastroEm)}${D.cadastroStatus && D.cadastroStatus !== "OK" ? " · " + esc(D.cadastroStatus) : ""}</div>` : ""}
-    <div>${inteiro(C.cod.length)} clientes · ${inteiro(CID.size)} municípios</div>
+    <div>${UFS_ORDEM.filter((u) => UFX[u] && UFX[u].D).map((u) => u + ": " + inteiro(UFX[u].D.cli.cod.length) + " clientes · " + inteiro(UFX[u].CID.size) + " municípios").join("<br>")}</div>
     <div>População: IBGE, Censo 2022</div><div>versão ${window.VERSAO}</div>`;
 }
 function montarFiltros() {
@@ -296,13 +309,14 @@ function montarFiltros() {
     <label class="fx-data">de <input type="date" id="f-d0" value="${iso(S.d0)}" min="${iso(0)}" max="${iso(FIM)}"></label>
     <label class="fx-data">até <input type="date" id="f-d1" value="${iso(S.d1)}" min="${iso(0)}" max="${iso(FIM)}"></label>
     <span class="fx-sep"></span>
+    ${S.uf == null ? `<span class="fx-rot" style="color:var(--t3)">Supervisor, RCA, cidade, fornecedor, produto e bairro: abra um estado no mapa</span>` : `
     <button class="fx-btn ${nSup ? "on" : ""}" data-pop="sup">Supervisor ${nSup ? `<span class="n">${nSup}</span>` : ""}${IC.seta}</button>
     <button class="fx-btn ${nRca ? "on" : ""}" data-pop="rca">RCA ${nRca ? `<span class="n">${nRca}</span>` : ""}${IC.seta}</button>
     <button class="fx-btn ${cid ? "on" : ""}" data-pop="cidade">${cid ? esc(cid.nome) : "Cidade"} ${IC.seta}</button>
     <button class="fx-btn ${S.forn.size ? "on" : ""}" data-pop="forn" title="Venda por fornecedor: a base da aba Fornecedor do app Supervisor Lube e da Análise Comercial">Fornecedor ${S.forn.size ? `<span class="n">${S.forn.size}</span>` : ""}${IC.seta}</button>
     <button class="fx-btn ${S.prod.size ? "on" : ""}" data-pop="prod" title="${S.forn.size ? "Produtos dos fornecedores escolhidos" : "Todos os produtos com venda no estado"}">Produto ${S.prod.size ? `<span class="n">${S.prod.size}</span>` : ""}${IC.seta}</button>
     <span class="fx-sep"></span>
-    <button class="fx-btn ${S.bairro != null ? "on" : ""}" data-pop="bairro" title="${cid ? "Bairros de " + esc(cid.nome) : "Bairros de todos os municípios (escolher um abre o município)"}">${S.bairro != null ? esc(titulo(S.bairro)) : "Bairro"} ${IC.seta}</button>
+    <button class="fx-btn ${S.bairro != null ? "on" : ""}" data-pop="bairro" title="${cid ? "Bairros de " + esc(cid.nome) : "Bairros de todos os municípios (escolher um abre o município)"}">${S.bairro != null ? esc(titulo(S.bairro)) : "Bairro"} ${IC.seta}</button>`}
     <span class="fx-sep"></span>
     <span class="fx-rot" title="Quem conta como cliente da base, além de quem comprou no período">Base</span>
     <span class="seg" id="seg-base">
@@ -339,7 +353,7 @@ function ligarFiltros() {
       };
       if (ITL) return abrir(ITL);
       toast("Lendo os fornecedores e produtos do estado…");
-      return carregarLista().then(abrir).catch((e) => toast("Não consegui ler a lista: " + e.message, "erro"));
+      return carregarLista().then((L) => { if (S.uf) abrir(L); }).catch((e) => toast("Não consegui ler a lista: " + e.message, "erro"));
     }
     if (b.dataset.pop === "bairro") {
       // Bairro só existe dentro de um município (o mesmo nome se repete em cidades diferentes): a chave é "ibge|bairro".
@@ -426,7 +440,7 @@ function desenharKpis() {
     : `<span style="color:var(${agora >= antes ? "--ok" : "--perigo"});font-weight:700" title="${brl(antes)} de ${dataBR(Math.max(0, p0))} a ${dataBR(p1)}">${agora >= antes ? "▲" : "▼"} ${pct(Math.abs(agora / antes - 1))}</span><span>contra ${dataBR(Math.max(0, p0)).slice(0, 5)} a ${dataBR(p1).slice(0, 5)}</span>`;
   const cmp = cmpDe(e.venda, ant && ant.venda), cmpF = cmpDe(e.fat, ant && ant.fat);
   // o que o extrator não conseguiu pôr no mapa (cliente do banco sem cadastro no ES) fica dito, não some calado
-  const foraMapa = (q) => { const x = D.semCliente && D.semCliente[q]; return S.cidade == null && x && Math.abs(x[1]) >= 0.005 ? `<span style="flex-basis:100%;color:var(--atencao)" title="Soma do pacote inteiro, não do período">Fora do mapa: ${brl(x[1])} de cliente sem cadastro no ES</span>` : ""; };
+  const foraMapa = (q) => { const x = D.semCliente && D.semCliente[q]; return S.uf != null && S.cidade == null && x && Math.abs(x[1]) >= 0.005 ? `<span style="flex-basis:100%;color:var(--atencao)" title="Soma do pacote inteiro, não do período">Fora do mapa: ${brl(x[1])} de cliente sem cadastro no estado</span>` : ""; };
   const k = (cls, rot, icone, corpo, leg, extra) => `<div class="kpi ${cls}" ${extra || ""}><div class="rot">${icone}${rot}</div>${corpo}<div class="leg">${leg}</div></div>`;
   const el = $("#kpis");
   if (!el.dataset.pronto) {
@@ -471,11 +485,12 @@ function desenharKpis() {
   else { $("#k-pop").textContent = "—"; $("#k-pop").dataset.v = 0; $("#k-vh").textContent = "—"; $("#k-vh").dataset.v = 0; }
   $("#olho").textContent = (S.rapido ? { mes: "Mês atual", ant: "Mês passado", "3m": "3 meses", ano: "Ano", tudo: "Todo o período" }[S.rapido] + " · " : "") + dataBR(S.d0) + " a " + dataBR(S.d1);
   $("#titulo").textContent = "Mapa de vendas · " + e.nome;
+  const sub = $("#marca-uf"); if (sub) sub.textContent = nomeUF();
 }
 
 /* ------------------------------------------------------------------ mapa */
 let mapa = null, camGeo = null, camRot = null, camPts = null, camMasc = null, camFoco = null, camRuas = null;
-const camada = new Map();                        // ibge -> layer do município
+let camada = new Map();                          // ibge -> layer do município (do estado aberto)
 const ponto = new Map();                         // índice do cliente -> marcador
 const CLASSES_PCT = ["#d93a45", "#ee8a3c", "#f2c14e", "#7fd18b", "#34e89e"];
 const corPct = (p) => CLASSES_PCT[Math.min(4, Math.floor(p * 5))];
@@ -489,42 +504,139 @@ function centroide(geo) {
   }
   return melhor;
 }
+const longe = (geo) => {                         // Trindade e Martim Vaz (de Vitória, a 1.100 km da costa, a -29°) esticavam o mapa
+  if (geo.type !== "MultiPolygon") return;
+  const perto = geo.coordinates.filter((p) => p[0][0][0] < -34);   // a costa da Bahia vai até -37°: o corte é depois dela
+  if (perto.length && perto.length < geo.coordinates.length) geo.coordinates = perto;
+};
+let camEstados = null;
+const camRotUF = L.layerGroup();
 function criarMapa() {
-  mapa = L.map("mapa", { zoomControl: false, zoomSnap: 0.25, zoomDelta: 0.5, minZoom: 6.5, maxZoom: 18, attributionControl: true, wheelPxPerZoomLevel: 90 });
+  mapa = L.map("mapa", { zoomControl: false, zoomSnap: 0.25, zoomDelta: 0.5, minZoom: 4, maxZoom: 18, attributionControl: true, wheelPxPerZoomLevel: 90 });
   mapa.attributionControl.setPrefix(false).addAttribution("Malha e população: IBGE");
   L.control.zoom({ position: "topright", zoomInTitle: "Aproximar", zoomOutTitle: "Afastar" }).addTo(mapa);
+  mapa.createPane("estados").style.zIndex = 380;
   mapa.createPane("mascara").style.zIndex = 410;
   mapa.createPane("foco").style.zIndex = 420;
   mapa.createPane("pontos").style.zIndex = 450;
-  camGeo = L.geoJSON(GEO, {
-    style: estiloMunicipio,
+  camEstados = L.geoJSON(EST, {
+    pane: "estados", style: estiloEstado,
     onEachFeature: (f, l) => {
-      camada.set(f.properties.ibge, l);
-      l.on("mousemove", (e) => { if (S.cidade === f.properties.ibge) return esconderDica(); mostrarDica(dicaCidade(f.properties.ibge), e.originalEvent.clientX, e.originalEvent.clientY); });
-      l.on("mouseover", () => { if (S.cidade !== f.properties.ibge) l.setStyle({ weight: 2.2, color: cssVar("--mp-divisa-forte") }); l.bringToFront(); });
-      l.on("mouseout", () => { esconderDica(); camGeo.resetStyle(l); });
-      l.on("click", (e) => { L.DomEvent.stopPropagation(e); if (S.cidade !== f.properties.ibge) abrirCidade(f.properties.ibge); });
+      const uf = f.properties.uf;
+      l.on("mousemove", (e) => { if (S.uf === uf) return esconderDica(); mostrarDica(dicaEstado(uf), e.originalEvent.clientX, e.originalEvent.clientY); });
+      l.on("mouseover", () => { if (S.uf !== uf) l.setStyle({ weight: 3, color: cssVar("--ouro") || "#e9c877" }); });
+      l.on("mouseout", () => { esconderDica(); camEstados.resetStyle(l); });
+      l.on("click", (e) => { L.DomEvent.stopPropagation(e); if (S.uf !== uf) abrirUF(uf); });
     },
   }).addTo(mapa);
+  camRotUF.addTo(mapa);
   camRot = L.layerGroup().addTo(mapa);
   camPts = L.layerGroup().addTo(mapa);
   mapa.invalidateSize();
   mapa.on("zoomend", rotular);
-  mapa.fitBounds(camGeo.getBounds(), { padding: [18, 18] });
-  mapa.setMaxBounds(camGeo.getBounds().pad(0.8));
+  mapa.fitBounds(camEstados.getBounds(), { padding: [24, 24] });
+  mapa.setMaxBounds(camEstados.getBounds().pad(0.6));
   if (window.ResizeObserver) {                    // a caixa muda de tamanho (janela, menu): o mapa acompanha
     let t = null;
     new ResizeObserver(() => { clearTimeout(t); t = setTimeout(() => {
       mapa.invalidateSize({ animate: false });
-      if (S.cidade == null) mapa.fitBounds(camGeo.getBounds(), { padding: [18, 18], animate: false });
+      if (S.uf == null) mapa.fitBounds(camEstados.getBounds(), { padding: [24, 24], animate: false });
+      else if (S.cidade == null) mapa.fitBounds(camGeo.getBounds(), { padding: [18, 18], animate: false });
     }, 120); }).observe($("#mapa"));
   }
   document.addEventListener("keydown", (e) => {
     if (e.key !== "Escape") return;
     if (popAberto) return fecharPop();
     if (e.target.closest && e.target.closest("input, select, textarea")) return;   // Esc dentro de um campo é do campo
-    if (S.bairro != null) return abrirBairro(null); if (S.cidade != null) voltarEstado();
+    if (S.bairro != null) return abrirBairro(null); if (S.cidade != null) return voltarEstado(); if (S.uf != null) voltarGeral();
   });
+}
+function camadaUF(uf) {                          // os municípios do estado, montados na primeira vez que ele abre
+  const x = UFX[uf];
+  if (x.cam) return x.cam;
+  x.cam = L.geoJSON(x.GEO, {
+    style: estiloMunicipio,
+    onEachFeature: (f, l) => {
+      x.camada.set(f.properties.ibge, l);
+      l.on("mousemove", (e) => { if (S.cidade === f.properties.ibge) return esconderDica(); mostrarDica(dicaCidade(f.properties.ibge), e.originalEvent.clientX, e.originalEvent.clientY); });
+      l.on("mouseover", () => { if (S.cidade !== f.properties.ibge) l.setStyle({ weight: 2.2, color: cssVar("--mp-divisa-forte") }); l.bringToFront(); });
+      l.on("mouseout", () => { esconderDica(); x.cam.resetStyle(l); });
+      l.on("click", (e) => { L.DomEvent.stopPropagation(e); if (S.cidade !== f.properties.ibge) abrirCidade(f.properties.ibge); });
+    },
+  });
+  return x.cam;
+}
+/* ---- visão geral: ES e Bahia */
+function estiloEstado(f) {
+  const uf = f.properties.uf, divisa = cssVar("--mp-divisa-forte");
+  if (S.uf === uf) return { color: divisa, weight: 0, opacity: 0, fillOpacity: 0 };          // o aberto: quem desenha são os municípios
+  if (S.uf != null) return { color: divisa, weight: 1.4, opacity: 0.8, dashArray: "5 4", fillColor: cssVar("--mp-e1"), fillOpacity: 0.18 };   // o outro: clicável
+  const x = RG && RG[uf];
+  if (!x) return { color: divisa, weight: 1.6, opacity: 1, fillColor: cssVar("--mp-vazio"), fillOpacity: 0.9 };
+  const mv = S.metrica === "fat" ? "fat" : "venda";
+  const max = Math.max(1, ...Object.values(RG).map((r) => Math.max(0, r.e[mv])));
+  const t = Math.sqrt(Math.max(0, x.e[mv]) / max);
+  return { color: divisa, weight: 1.6, opacity: 1, fillColor: cssVar("--mp-e" + (t > 0.8 ? 5 : t > 0.6 ? 4 : t > 0.4 ? 3 : t > 0.2 ? 2 : 1)), fillOpacity: 0.94 };
+}
+function dicaEstado(uf) {
+  const x = RG && RG[uf], u = UFX[uf];
+  if (!x) return `<div class="t">${NOMES_UF[uf]}</div><div class="l"><span>${u && u.erro ? "Sem dados agora: " + esc(u.erro) : "Carregando…"}</span></div>`;
+  const e = x.e;
+  return `<div class="t">${NOMES_UF[uf]}</div>
+    ${linhaDica("Venda", brl(e.venda), "var(--d1)")}${linhaDica("Faturado", brl(e.fat), "var(--info)")}
+    ${linhaDica("Clientes com venda", inteiro(e.at) + " de " + inteiro(e.cli), "var(--mp-com)")}
+    ${linhaDica("Municípios com venda", inteiro([...x.R.cid.values()].filter((c) => c.at).length) + " de " + inteiro(x.R.cid.size))}
+    ${linhaDica("População", inteiro(e.pop))}
+    <div class="dica-clique">Clique para abrir o mapa do estado</div>`;
+}
+function calcularGeral() {                       // os números de cada estado no período (sem os filtros de dentro do estado)
+  RG = {};
+  for (const uf of UFS_ORDEM) {
+    if (!UFX[uf] || !UFX[uf].D) continue;
+    usarUF(uf); calcular();
+    const [p0, p1] = periodoAnterior();
+    RG[uf] = { e: escopoUF(), ant: trecho(p0, p1), R };
+  }
+}
+function pintarGeral() {
+  camEstados.setStyle(estiloEstado);
+  camRotUF.clearLayers(); camRot.clearLayers();
+  if (S.uf == null) for (const f of EST.features) {
+    const uf = f.properties.uf, x = RG && RG[uf], mv = S.metrica === "fat" ? "fat" : "venda";
+    L.marker(centroide(f.geometry), { interactive: false, keyboard: false, icon: L.divIcon({ className: "", iconSize: [0, 0],
+      html: `<div class="rot-estado">${NOMES_UF[uf]}<small>${x ? curto(x.e[mv]) : UFX[uf] && UFX[uf].erro ? "sem dados" : "…"}</small></div>` }) }).addTo(camRotUF);
+  }
+  desenharTopoMapa(); desenharLegenda();
+}
+function usarUF(uf) {                            // troca o estado que as contas usam (pacote, municípios, camada)
+  const x = UFX[uf];
+  aplicarDados(x.D);
+  CID = x.CID; camada = x.camada; camGeo = x.cam; ITL = x.itl || null;
+}
+function abrirUF(uf) {
+  const x = UFX[uf];
+  if (!x || !x.D) return toast(x && x.erro ? "Sem dados de " + NOMES_UF[uf] + " agora: " + x.erro : "Ainda carregando " + NOMES_UF[uf] + "…", "erro");
+  S.uf = uf; S.cidade = null; S.bairro = null; S.tbPag = 0; S.sup.clear(); S.rca.clear(); S.forn.clear(); S.prod.clear();
+  if (S.tbFiltro === "int" && !S.interna) S.tbFiltro = "todos";
+  esconderDica(); mapa.closePopup(); fecharPop();
+  for (const u in UFX) if (UFX[u].cam && mapa.hasLayer(UFX[u].cam)) mapa.removeLayer(UFX[u].cam);
+  usarUF(uf); camGeo = camadaUF(uf); camGeo.addTo(mapa);
+  try { history.replaceState(null, "", "?uf=" + uf); } catch (e) {}
+  refazer(); camEstados.setStyle(estiloEstado); camRotUF.clearLayers();
+  mapa.flyToBounds(camGeo.getBounds(), { padding: [18, 18], duration: calmo ? 0 : 1.1, easeLinearity: 0.2 });
+  setTimeout(() => carregarLista().catch(() => {}), 1500);
+}
+function voltarGeral() {
+  S.uf = null; S.cidade = null; S.bairro = null; S.tbPag = 0; S.sup.clear(); S.rca.clear(); S.forn.clear(); S.prod.clear();
+  if (S.metrica !== "fat") S.metrica = "venda";
+  esconderDica(); mapa.closePopup(); fecharPop();
+  if (camMasc) { mapa.removeLayer(camMasc); camMasc = null; }
+  if (camFoco) { mapa.removeLayer(camFoco); camFoco = null; }
+  if (camGeo && mapa.hasLayer(camGeo)) mapa.removeLayer(camGeo);
+  camPts.clearLayers(); ponto.clear(); ruas();
+  try { history.replaceState(null, "", location.pathname); } catch (e) {}
+  refazer();
+  mapa.flyToBounds(camEstados.getBounds(), { padding: [24, 24], duration: calmo ? 0 : 1, easeLinearity: 0.2 });
 }
 function valorMetrica(c) { return S.metrica === "venda" ? c.venda : S.metrica === "fat" ? Math.max(0, c.fat) : S.metrica === "pct" ? (c.cli ? c.at / c.cli : 0) : (c.pop ? c.venda / c.pop : 0); }
 let maxMetrica = 1;
@@ -553,6 +665,7 @@ function dicaCidade(ib) {
     <div class="dica-clique">Clique para abrir o município</div>`;
 }
 function pintarMapa() {
+  if (S.uf == null) return pintarGeral();
   maxMetrica = 0;
   for (const c of R.cid.values()) maxMetrica = Math.max(maxMetrica, valorMetrica(c));
   camGeo.setStyle(estiloMunicipio);
@@ -560,7 +673,7 @@ function pintarMapa() {
 }
 function rotular() {                              // nomes dos maiores no mapa do estado; rótulo que encostaria em outro não aparece
   camRot.clearLayers();
-  if (S.cidade != null || !R) return;
+  if (S.uf == null || S.cidade != null || !R) return;
   const postos = [];
   const mv = S.metrica === "fat" ? "fat" : "venda";
   for (const c of [...R.cid.values()].filter((x) => x[mv] > 0).sort((a, b) => b[mv] - a[mv]).slice(0, 24)) {
@@ -574,14 +687,23 @@ function rotular() {                              // nomes dos maiores no mapa d
 function desenharTopoMapa() {
   const c = S.cidade != null ? R.cid.get(S.cidade) : null;
   $("#mapa-topo").innerHTML = c
-    ? `<button class="mapa-voltar" id="mp-voltar" title="Voltar (Esc)">${IC.voltar}${S.bairro != null ? esc(c.nome) : "Espírito Santo"}</button>
+    ? `<button class="mapa-voltar" id="mp-voltar" title="Voltar (Esc)">${IC.voltar}${S.bairro != null ? esc(c.nome) : esc(nomeUF())}</button>
        <span class="mapa-onde">${S.bairro != null ? esc(titulo(S.bairro)) : esc(c.nome)}<small>${S.bairro != null ? esc(c.nome) : inteiro(c.cli) + " clientes"}</small></span>
        <span class="seg"><button class="${S.camada === "clientes" ? "on" : ""}" data-cam="clientes">Clientes</button><button class="${S.camada === "bairros" ? "on" : ""}" data-cam="bairros">Bairros</button></span>
        <span class="seg"><button class="${S.ruas ? "on" : ""}" data-ruas="1" title="Mostrar as ruas (precisa de internet)">Ruas</button></span>`
-    : `<span class="seg">${[["venda", "Venda"], ["fat", rotFat()], ["pct", "% de clientes atendidos"], ["hab", "Venda por habitante"]].map(([k, t]) => `<button class="${S.metrica === k ? "on" : ""}" data-met="${k}">${t}</button>`).join("")}</span>`;
+    : S.uf == null ? `<span class="mapa-onde">ES e Bahia<small>clique no estado para abrir o mapa dele</small></span>
+       <span class="seg">${[["venda", "Venda"], ["fat", "Faturado"]].map(([k, t]) => `<button class="${S.metrica === k || (k === "venda" && S.metrica !== "fat") ? "on" : ""}" data-met="${k}">${t}</button>`).join("")}</span>`
+    : `<button class="mapa-voltar" id="mp-geral" title="Voltar para ES e Bahia (Esc)">${IC.voltar}ES e Bahia</button>
+       <span class="seg">${[["venda", "Venda"], ["fat", rotFat()], ["pct", "% de clientes atendidos"], ["hab", "Venda por habitante"]].map(([k, t]) => `<button class="${S.metrica === k ? "on" : ""}" data-met="${k}">${t}</button>`).join("")}</span>`;
 }
 function desenharLegenda() {
   const el = $("#mapa-legenda");
+  if (S.uf == null) {
+    el.innerHTML = `<div class="lt">${S.metrica === "fat" ? "Faturado" : "Venda"} no período</div>
+      ${UFS_ORDEM.map((uf) => `<div class="li"><i class="q" style="background:var(--mp-e3)"></i>${NOMES_UF[uf]}<b>${RG && RG[uf] ? curto(RG[uf].e[S.metrica === "fat" ? "fat" : "venda"]) : "—"}</b></div>`).join("")}
+      <div class="li" style="color:var(--t3)">Clique no estado: o mapa abre nele</div>`;
+    return;
+  }
   if (S.cidade == null) {
     const semAt = [...R.cid.values()].filter((c) => c.cli && (S.metrica === "fat" ? !c.at && c.fat <= 0 : !c.at)).length, vazios = [...R.cid.values()].filter((c) => !c.cli).length;
     const escala = S.metrica === "pct" ? CLASSES_PCT : [1, 2, 3, 4, 5].map((i) => cssVar("--mp-e" + i));
@@ -607,7 +729,8 @@ function ligarMapa() {
   $("#mapa-topo").addEventListener("click", (e) => {
     const b = e.target.closest("button"); if (!b) return;
     if (b.id === "mp-voltar") return S.bairro != null ? abrirBairro(null) : voltarEstado();
-    if (b.dataset.met) { S.metrica = b.dataset.met; return pintarMapa(); }
+    if (b.id === "mp-geral") return voltarGeral();
+    if (b.dataset.met) { S.metrica = b.dataset.met; return S.uf == null ? pintarGeral() : pintarMapa(); }
     if (b.dataset.cam) { S.camada = b.dataset.cam; desenharTopoMapa(); desenharLegenda(); return desenharPontos(); }
     if (b.dataset.ruas) { S.ruas = !S.ruas; ruas(); camGeo.setStyle(estiloMunicipio); return desenharTopoMapa(); }
   });
@@ -666,7 +789,7 @@ function cartaoCliente(i) {
 }
 function desenharPontos(entrando) {
   camPts.clearLayers(); ponto.clear();
-  if (S.cidade == null) return;
+  if (S.uf == null || S.cidade == null) return;
   const c = R.cid.get(S.cidade), com = cssVar("--mp-com"), nao = cssVar("--mp-nao"), borda = cssVar("--mp-fundo");
   if (S.camada === "bairros") {
     let maxCli = 1; for (const b of c.bairros.values()) maxCli = Math.max(maxCli, b.cli);
@@ -716,6 +839,16 @@ function focarCliente(i) {
 /* ------------------------------------------------------------------ painel ao lado */
 function desenharLado() {
   const el = $("#lado");
+  if (S.uf == null) {
+    el.innerHTML = `<div class="painel-cab"><div class="painel-tit"><h3>Estados</h3><p>Clique para abrir o mapa do estado</p></div></div>
+      <div class="painel-corpo">${UFS_ORDEM.map((uf, i) => { const x = RG && RG[uf], u = UFX[uf];
+        if (!x) return `<button class="lin" data-uf="${uf}"><span class="pos">${i + 1}</span><span class="nm">${NOMES_UF[uf]}<small>${u && u.erro ? "Sem dados agora" : "Carregando…"}</small></span></button>`;
+        const e = x.e;
+        return `<button class="lin" data-uf="${uf}" title="${NOMES_UF[uf]} · venda ${brl(e.venda)} · faturado ${brl(e.fat)}">
+          <span class="pos">${i + 1}</span><span class="nm">${NOMES_UF[uf]}<small>${inteiro(e.at)} de ${inteiro(e.cli)} clientes com venda · ${pct(e.cli ? e.at / e.cli : 0)} · faturado ${curto(e.fat)}</small></span>
+          <span class="vl">${curto(e.venda)}<small>venda</small></span><span class="duo"><i style="--p:${(e.cli ? 100 * e.at / e.cli : 0).toFixed(1)}%"></i></span></button>`; }).join("")}</div>`;
+    return;
+  }
   if (S.cidade == null) {
     const ord = { venda: (a, b) => b.venda - a.venda, fat: (a, b) => b.fat - a.fat, sem: (a, b) => (b.cli - b.at) - (a.cli - a.at), pct: (a, b) => (a.cli ? a.at / a.cli : 2) - (b.cli ? b.at / b.cli : 2) }[S.ordCid];
     const lista = [...R.cid.values()].filter((c) => c.cli).sort(ord);
@@ -734,7 +867,7 @@ function desenharLado() {
     const lista = [...c.bairros.values()].sort(ord), bAt = lista.filter((b) => b.at).length;
     el.innerHTML = `<div class="painel-cab"><div class="painel-tit"><h3>${esc(c.nome)}</h3><p>${bAt} de ${inteiro(lista.length)} bairros com venda · clique para ver os clientes</p></div>
       <div class="painel-acoes"><span class="seg">${[["sem", "Sem venda"], ["venda", "Venda"], ["az", "A–Z"]].map(([k, t]) => `<button class="${S.ordBai === k ? "on" : ""}" data-ordbai="${k}">${t}</button>`).join("")}</span></div></div>
-      <div class="trilha"><button data-volta="es">Espírito Santo</button>›<b>${esc(c.nome)}</b></div>
+      <div class="trilha"><button data-volta="geral">ES e Bahia</button>›<button data-volta="es">${esc(nomeUF())}</button>›<b>${esc(c.nome)}</b></div>
       <div class="lado-mini"><div class="v"><span>Com venda</span><b>${inteiro(c.at)} <small>clientes</small></b></div><div class="r"><span>Sem venda</span><b>${inteiro(c.cli - c.at)} <small>clientes</small></b></div>
         <div><span>Venda</span><b>${curto(c.venda)}</b></div><div><span>${rotFat()}</span><b>${curto(c.fat)}</b></div></div>
       <div class="painel-corpo">${lista.map((b, i) => `<button class="lin" data-bai="${esc(b.nome)}" title="${esc(titulo(b.nome))} · ${brl(b.venda)}">
@@ -748,13 +881,13 @@ function desenharLado() {
   const ints = S.interna ? c.idsInt.filter((i) => BAI(i) === S.bairro) : [];
   const ids = b.ids.concat(ints).sort((x, y) => (R.soInt[x] - R.soInt[y]) || (R.comprou[x] - R.comprou[y]) || (R.venda[y] - R.venda[x]) || ((C.ult[y] ?? -1e9) - (C.ult[x] ?? -1e9)));
   el.innerHTML = `<div class="painel-cab"><div class="painel-tit"><h3>${esc(titulo(b.nome))}</h3><p>${inteiro(b.cli)} clientes · os sem venda primeiro${ints.length ? " · + " + inteiro(ints.length) + " só operação interna" : ""}</p></div></div>
-    <div class="trilha"><button data-volta="es">Espírito Santo</button>›<button data-volta="cid">${esc(c.nome)}</button>›<b>${esc(titulo(b.nome))}</b></div>
+    <div class="trilha"><button data-volta="geral">ES e Bahia</button>›<button data-volta="es">${esc(nomeUF())}</button>›<button data-volta="cid">${esc(c.nome)}</button>›<b>${esc(titulo(b.nome))}</b></div>
     <div class="lado-mini"><div class="v"><span>Com venda</span><b>${inteiro(b.at)}</b></div><div class="r"><span>Sem venda</span><b>${inteiro(b.cli - b.at)}</b></div>
       <div><span>Venda</span><b>${curto(b.venda)}</b></div><div><span>${rotFat()}</span><b>${curto(b.fat)}</b></div></div>
     <div class="painel-corpo">${ids.map((i) => `<button class="lin" data-cli="${i}" title="${esc(titulo(C.nome[i]))}">
       <span class="bola ${R.soInt[i] ? "int" : R.comprou[i] ? "com" : ""} ${C.loc[i] === 2 ? "aprox" : !C.loc[i] ? "sem" : ""}"></span>
       <span class="nm">${esc(titulo(C.nome[i]))}<small>${C.cod[i]} · última compra ${C.ult[i] != null ? dataBR(C.ult[i]) : "nunca"}</small></span>
-      ${R.soInt[i] ? `<span class="vl" style="color:var(--mp-int)">${curto(R.vint[i])}<small>op. interna</small></span>` : R.comprou[i] ? `<span class="vl">${curto(R.venda[i])}<small>${R.ped[i]} ped.</small></span>` : `<span class="vl nao">sem venda</span>`}</button>`).join("")}</div>`;
+      ${R.soInt[i] ? `<span class="vl" style="color:var(--mp-int)">${curto(R.vint[i])}<small>op. interna</small></span>` : R.comprou[i] ? `<span class="vl">${curto(R.venda[i])}<small>${itemAtivo() ? R.ped[i].toLocaleString("pt-BR", { maximumFractionDigits: 3 }) + " un." : R.ped[i] + " ped."}</small></span>` : `<span class="vl nao">sem venda</span>`}</button>`).join("")}</div>`;
 }
 function ligarLado() {
   $("#lado").addEventListener("click", (e) => {
@@ -763,6 +896,8 @@ function ligarLado() {
     if (b.dataset.ordbai) { S.ordBai = b.dataset.ordbai; return desenharLado(); }
     if (b.dataset.cid) return abrirCidade(+b.dataset.cid);
     if (b.dataset.bai != null) return abrirBairro(b.dataset.bai);
+    if (b.dataset.volta === "geral") return voltarGeral();
+    if (b.dataset.uf) return abrirUF(b.dataset.uf);
     if (b.dataset.volta === "es") return voltarEstado();
     if (b.dataset.volta === "cid") return abrirBairro(null);
     if (b.dataset.cli) return focarCliente(+b.dataset.cli);
@@ -803,6 +938,7 @@ function linhasLista() {
   return ids;
 }
 function desenharLista() {
+  if (S.uf == null) { $("#sec-lista").innerHTML = `<div class="painel-cab"><div class="painel-tit"><h3>Clientes por cidade e bairro</h3><p>ES e Bahia · ${dataBR(S.d0)} a ${dataBR(S.d1)}</p></div></div><div class="vazio"><b>Escolha um estado</b>Clique no Espírito Santo ou na Bahia, no mapa ou no painel ao lado, para ver os clientes.</div>`; return; }
   const ids = linhasLista(), q = sem(S.tbBusca.trim());
   let tot = 0, totF = 0, com = 0, nInt = 0, vInt = 0; for (const i of ids) { tot += R.venda[i]; totF += R.fat[i]; com += R.comprou[i]; vInt += R.vint[i]; if (R.soInt[i]) nInt++; }   // a operação interna de todas as linhas, como o cartão e o Excel
   const pags = Math.max(1, Math.ceil(ids.length / S.tbTam)); S.tbPag = Math.min(S.tbPag, pags - 1);
@@ -860,7 +996,7 @@ function filtrosTexto() {
     ["Venda", "Item de pedido faturado pela regra do Relatório 146 (sem ST, sem bonificação), pela data do pedido: a base da aba Fornecedor do app Supervisor Lube e da Análise Comercial"],
     ["Líquido", "Venda do item − devolução sem ST (pela data da devolução)"],
   ] : [
-    ["Venda", "A do Relatório 146: pedido digitado, sem ST, todas as filiais, só as equipes de venda; cliente do ES"],
+    ["Venda", "A do Relatório 146: pedido digitado, sem ST, todas as filiais, só as equipes de venda; cliente do estado"],
     ["Faturado", "O total líquido da aba ST do Central Comercial (venda − devolução sem ST), o mesmo do app dos supervisores"],
   ]).concat([
     ["Operação interna", "Fora dos totais de venda e de faturado" + (S.interna ? "; os clientes que só compraram por ela estão na lista, com os valores em colunas próprias" : "; não listada")],
@@ -870,7 +1006,7 @@ function excel() {
   if (!window.Planilha) return toast("Excel indisponível", "erro");
   const ids = linhasLista(); let tot = 0, totF = 0, com = 0, nInt = 0; for (const i of ids) { tot += R.venda[i]; totF += R.fat[i]; com += R.comprou[i]; nInt += R.soInt[i]; }
   Planilha.baixar({
-    arquivo: "Mapa de Vendas ES - clientes " + iso(S.d0) + " a " + iso(S.d1), titulo: "Mapa de Vendas · Espírito Santo", subtitulo: "Clientes por cidade e bairro", aba: "Clientes",
+    arquivo: "Mapa de Vendas " + S.uf + " - clientes " + iso(S.d0) + " a " + iso(S.d1), titulo: "Mapa de Vendas · " + nomeUF(), subtitulo: "Clientes por cidade e bairro", aba: "Clientes",
     filtros: filtrosTexto(), resumo: [["Venda", tot, "moeda"], [rotFat(), totF, "moeda"], ["Clientes", ids.length - nInt, "inteiro"], ["Com venda", com, "inteiro"], ["Sem venda", ids.length - com - nInt, "inteiro"]].concat(nInt ? [["Só operação interna", nInt, "inteiro"]] : []),
     colunas: [
       { titulo: "Cidade", tipo: "texto", valor: (i) => (CID.get(C.ib[i]) || { nome: "" }).nome },
@@ -888,7 +1024,7 @@ function excel() {
       { titulo: "Venda op. interna", tipo: "moeda", somar: true, valor: (i) => R.vint[i] },
       { titulo: rotFat() + " op. interna", tipo: "moeda", somar: true, valor: (i) => R.fint[i] },
     ],
-    linhas: ids, rodape: "Mapa de Vendas ES · Lube Distribuidora · gerado em " + new Date().toLocaleString("pt-BR"),
+    linhas: ids, rodape: "Mapa de Vendas " + S.uf + " · Lube Distribuidora · gerado em " + new Date().toLocaleString("pt-BR"),
   }).then(() => toast("Planilha gerada", "ok")).catch((e) => toast("Erro no Excel: " + e.message, "erro"));
 }
 
@@ -909,7 +1045,7 @@ async function carregarItens() {                  // a venda do fornecedor/produ
   if (IT && IT.chave === chave) return;
   if (IT_PEDIDO && IT_PEDIDO.chave === chave) return IT_PEDIDO.p;
   const [p0, p1] = periodoAnterior();
-  const q = new URLSearchParams({ uf: "ES", de: iso(S.d0), ate: iso(S.d1) });
+  const q = new URLSearchParams({ uf: S.uf, de: iso(S.d0), ate: iso(S.d1) });
   if (S.forn.size) q.set("forn", [...S.forn].join(","));
   if (S.prod.size) q.set("prod", [...S.prod].join(","));
   if (p1 >= 0) { q.set("de2", iso(Math.max(0, p0))); q.set("ate2", iso(p1)); }   // como na conta sem filtro: o pacote começa em 01/01/2025
@@ -924,18 +1060,22 @@ async function carregarItens() {                  // a venda do fornecedor/produ
   IT_PEDIDO = { chave, p };
   try { await p; } finally { if (IT_PEDIDO && IT_PEDIDO.chave === chave) IT_PEDIDO = null; }
 }
-async function carregarLista() {
-  if (ITL) return ITL;
-  if (!ITL_PEDIDO) ITL_PEDIDO = fetch("api/itens?lista=1&uf=ES", { cache: "no-store" }).then(async (r) => {
+const ITL_PEDIDOS = {};
+async function carregarLista() {                 // por estado, uma vez (o banco leva ~6 s; fica pronta antes do clique)
+  const uf = S.uf; if (!uf) throw new Error("abra um estado");
+  if (UFX[uf].itl) return (ITL = UFX[uf].itl);
+  if (!ITL_PEDIDOS[uf]) ITL_PEDIDOS[uf] = fetch("api/itens?lista=1&uf=" + uf, { cache: "no-store" }).then(async (r) => {
     const j = await r.json().catch(() => ({}));
     if (!r.ok) throw new Error(j.mensagem || "HTTP " + r.status);
-    ITL = j; ITL.nomeForn = new Map(j.forn.map((f) => [f[0], f[1]])); ITL.prodDe = new Map(j.prod.map((x) => [x[0], x]));
-    return ITL;
-  }).finally(() => { ITL_PEDIDO = null; });
-  return ITL_PEDIDO;
+    j.nomeForn = new Map(j.forn.map((f) => [f[0], f[1]])); j.prodDe = new Map(j.prod.map((x) => [x[0], x]));
+    UFX[uf].itl = j; if (S.uf === uf) ITL = j;
+    return j;
+  }).finally(() => { delete ITL_PEDIDOS[uf]; });
+  return ITL_PEDIDOS[uf];
 }
 let lendoItens = 0;
 function refazer() {
+  if (S.uf == null) { calcularGeral(); montarFiltros(); desenharKpis(); pintarGeral(); desenharLado(); desenharLista(); return; }
   if (itemAtivo() && !(IT && IT.chave === chaveItens())) {
     const chave = chaveItens(), marca = ++lendoItens;
     document.body.classList.add("lendo-itens"); $("#btn-atualizar").classList.add("girando");
@@ -951,16 +1091,19 @@ function refazer() {
 }
 /* Os dados vêm do banco (api/dados: sempre até hoje). Se o banco não responder, a tela abre com a última cópia guardada
    nesta máquina (dados/mapa.json, do etl/extrair.py) e diz isso no topo, em vez de ficar muda. */
-async function buscarDados(fresco) {
+async function buscarDados(fresco, uf) {
+  uf = uf || "ES";
   try {
-    const r = await fetch("api/dados" + (fresco ? "?fresco=1" : ""), { cache: "no-store" });
+    const r = await fetch("api/dados?uf=" + uf + (fresco ? "&fresco=1" : ""), { cache: "no-store" });
     if (!r.ok) throw new Error((await r.json().catch(() => ({}))).mensagem || "HTTP " + r.status);
-    return await r.json();
+    const d = await r.json(); d.uf = d.uf || uf;
+    return d;
   } catch (e) {
+    if (uf !== "ES") throw e;                      // a cópia guardada (etl/extrair.py) é só do ES
     console.warn("Banco indisponível, usando a cópia guardada:", e.message);
     const d = await fetch("dados/mapa.json", { cache: "no-store" }).then((r) => { if (!r.ok) throw new Error("sem banco (" + e.message + ") e sem cópia guardada"); return r.json(); });
     if (!d.ven || !d.ven.g || !d.fat || !d.fat.g) throw new Error("sem banco (" + e.message + ") e a cópia guardada é antiga (sem o grupo do supervisor): rode o ATUALIZAR DADOS.bat");
-    d.origem = "guardado"; d.erroBanco = e.message;
+    d.origem = "guardado"; d.erroBanco = e.message; d.uf = "ES";
     return d;
   }
 }
@@ -979,42 +1122,55 @@ async function atualizarDados(manual) {
   if (!manual && (document.hidden || popAberto || document.querySelector(".leaflet-popup"))) return;   // não mexe na tela no meio de uma leitura da pessoa
   atualizando = true; $("#btn-atualizar").classList.add("girando");
   try {
-    const eraBanco = D.origem === "banco", d = await buscarDados(manual);
-    if (d.origem !== "banco" && eraBanco) { if (manual) toast("O banco não respondeu agora: a tela continua com os dados de antes.", "erro"); return; }
+    const ufs = S.uf ? [S.uf] : UFS_ORDEM.filter((u) => UFX[u]);
+    const novos = await Promise.all(ufs.map((u) => buscarDados(manual, u).then((d) => [u, d], (e) => [u, null, e])));
     const ae = document.activeElement;             // a pessoa abriu algo enquanto o banco respondia: fica para a próxima volta
     if (!manual && (popAberto || document.querySelector(".leaflet-popup") || (ae && (ae.id === "f-d0" || ae.id === "f-d1")))) return;
-    const fimAntes = FIM;
-    aplicarDados(d); ultimaLeitura = Date.now();
+    const fimAntes = FIM; let algum = false, falhou = false;
+    for (const [u, d, e] of novos) {
+      const x = UFX[u];
+      if (!d || (d.origem !== "banco" && x.D && x.D.origem === "banco")) { falhou = true; continue; }   // banco fora: fica com o de antes
+      x.D = d; x.erro = null; algum = true;
+    }
+    if (!algum) { if (manual) toast("O banco não respondeu agora: a tela continua com os dados de antes.", "erro"); return; }
+    usarUF(S.uf || ufs[0]); ultimaLeitura = Date.now();
     if (S.rapido) [S.d0, S.d1] = periodoRapido(S.rapido);          // virou o dia: "mês atual" anda junto
     else if (S.d1 === fimAntes) S.d1 = FIM;
     S.d1 = Math.min(S.d1, FIM); S.d0 = Math.min(S.d0, S.d1);
     mapa.closePopup(); refazer(); mostrarQuando();
-    if (manual) toast(d.origem === "banco" ? "Dados lidos do banco agora" : "O banco não respondeu: cópia guardada", d.origem === "banco" ? "ok" : "erro");
+    if (manual) toast(falhou ? "Parte dos dados não veio do banco agora: o resto foi atualizado" : "Dados lidos do banco agora", falhou ? "erro" : "ok");
   } catch (e) { if (manual) toast("Não consegui atualizar: " + e.message, "erro"); }
   finally { atualizando = false; $("#btn-atualizar").classList.remove("girando"); }
 }
 async function iniciar() {
+  const json = (u) => fetch(u, { cache: "no-store" }).then((r) => { if (!r.ok) throw new Error(u + ": HTTP " + r.status); return r.json(); });
   try {
-    const [g, d] = await Promise.all([fetch("dados/es_municipios.json", { cache: "no-store" }).then((r) => r.json()), buscarDados(false)]);
-    GEO = g; aplicarDados(d); ultimaLeitura = Date.now();
-  } catch (e) {
-    $("#conteudo").innerHTML = `<div class="vazio"><b>Não consegui ler os dados</b>${esc(e.message)}</div>`; return;
+    EST = await json("dados/estados.json");
+  } catch (e) { $("#conteudo").innerHTML = `<div class="vazio"><b>Não consegui ler o mapa dos estados</b>${esc(e.message)}</div>`; return; }
+  for (const f of EST.features) longe(f.geometry);
+  // os dois estados em paralelo; um que falhe não derruba o outro (fica dito no mapa e no painel)
+  const pedidoUF = new URLSearchParams(location.search).get("uf"), pedido = pedidoUF && NOMES_UF[pedidoUF.toUpperCase()] ? pedidoUF.toUpperCase() : null;
+  const carregados = await Promise.all(UFS_ORDEM.map((uf) => Promise.all([json("dados/" + uf.toLowerCase() + "_municipios.json"), buscarDados(false, uf)])
+    .then(([g, d]) => [uf, g, d], (e) => [uf, null, null, e])));
+  for (const [uf, g, d, e] of carregados) {
+    const x = UFX[uf] = { CID: new Map(), camada: new Map(), cam: null, itl: null, erro: e ? e.message : null };
+    if (e) continue;
+    for (const f of g.features) longe(f.geometry);
+    x.GEO = g; x.D = d;
+    for (const f of g.features) x.CID.set(f.properties.ibge, { ibge: f.properties.ibge, nome: f.properties.nome, pop: f.properties.pop, feicao: f, centro: centroide(f.geometry) });
   }
-  for (const f of GEO.features) {                 // Trindade e Martim Vaz (de Vitória, a 1.100 km da costa) esticavam o mapa: ficam de fora do desenho
-    if (f.geometry.type !== "MultiPolygon") continue;
-    const perto = f.geometry.coordinates.filter((p) => p[0][0][0] < -39);
-    if (perto.length && perto.length < f.geometry.coordinates.length) f.geometry.coordinates = perto;
-  }
-  for (const f of GEO.features) CID.set(f.properties.ibge, { ibge: f.properties.ibge, nome: f.properties.nome, pop: f.properties.pop, feicao: f, centro: centroide(f.geometry) });
+  const primeiro = UFS_ORDEM.find((u) => UFX[u].D);
+  if (!primeiro) { $("#conteudo").innerHTML = `<div class="vazio"><b>Não consegui ler os dados</b>${esc(UFX.ES.erro || "")}</div>`; return; }
+  usarUF(primeiro); ultimaLeitura = Date.now();
   [S.d0, S.d1] = periodoRapido("mes");
-  calcular();
+  calcularGeral();
   montarCasca(); montarPagina(); montarFiltros(); ligarFiltros();
   criarMapa(); ligarMapa(); ligarLado(); ligarLista();
-  desenharKpis(); pintarMapa(); desenharLado(); desenharLista();
+  refazer();
+  if (pedido && UFX[pedido].D) setTimeout(() => abrirUF(pedido), calmo ? 0 : 450);   // link direto (?uf=ES ou ?uf=BA) abre no estado
   setInterval(() => atualizarDados(false), RELER_MS);              // a tela relê o banco sozinha
-  setTimeout(() => carregarLista().catch(() => {}), 2500);           // a lista de fornecedores e produtos (~6 s no banco) fica pronta antes do clique
   document.addEventListener("visibilitychange", () => { if (!document.hidden && Date.now() - ultimaLeitura > RELER_MS) atualizarDados(false); });
-  window.__mapa = { S, get R() { return R; }, get D() { return D; }, abrirCidade, abrirBairro, voltarEstado, escopo, refazer, atualizarDados };   // para conferência no console
+  window.__mapa = { S, get R() { return R; }, get D() { return D; }, get RG() { return RG; }, abrirUF, voltarGeral, abrirCidade, abrirBairro, voltarEstado, escopo, refazer, atualizarDados };   // para conferência no console
 }
 iniciar().catch((e) => { console.error(e); $("#conteudo").innerHTML = `<div class="vazio"><b>Não consegui montar a tela</b>${esc(e.message)}</div>`; });
 })();
