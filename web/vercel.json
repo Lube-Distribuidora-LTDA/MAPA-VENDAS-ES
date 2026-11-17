@@ -2,7 +2,8 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "regions": ["gru1"],
   "functions": {
-    "api/dados.js": { "maxDuration": 60, "memory": 1769, "includeFiles": "dados/es_municipios.json" }
+    "api/dados.js": { "maxDuration": 60, "memory": 1769, "includeFiles": "dados/es_municipios.json" },
+    "api/itens.js": { "maxDuration": 60 }
   },
   "headers": [
     {

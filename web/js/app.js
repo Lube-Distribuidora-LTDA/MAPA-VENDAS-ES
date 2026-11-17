@@ -60,11 +60,19 @@ let BASE = null, FIM = 0;                       // dia 0 e o último dia (hoje) 
 const CID = new Map();                          // ibge -> { ibge, nome, pop, feicao, centro }
 const SUP_NOME = new Map(), RCA_NOME = new Map(), RCA_SUP = new Map();
 const S = {
-  d0: 0, d1: 0, rapido: "mes", sup: new Set(), rca: new Set(), base: "aptos",
+  d0: 0, d1: 0, rapido: "mes", sup: new Set(), rca: new Set(), forn: new Set(), prod: new Set(), base: "aptos",
   cidade: null, bairro: null, metrica: "venda", camada: "clientes", ruas: true, interna: false,
   ordCid: "venda", ordBai: "sem", tbFiltro: "todos", tbBusca: "", tbOrd: "venda", tbDir: -1, tbPag: 0, tbTam: 50,
 };
 let R = null;                                   // resultado do cálculo do recorte
+/* Fornecedor e produto (Júlio, 2026-11-17): a venda do 146 e a nota do Central Comercial não abrem por produto. Com um
+   deles escolhido, a tela pede ao banco (api/itens) a venda por item da MESMA base da aba Fornecedor do app Supervisor Lube
+   e da Análise Comercial: item de pedido faturado (regra do 146, sem ST) e, no lugar do faturado, venda − devolução. */
+let ITL = null, ITL_PEDIDO = null;              // lista de fornecedores e produtos do estado
+let IT = null, IT_PEDIDO = null;                // { chave, cur: [linhas], ant: [linhas], perdido }
+const CIDX = new Map();                         // código do cliente -> índice no pacote
+const itemAtivo = () => S.forn.size > 0 || S.prod.size > 0;
+const rotFat = () => itemAtivo() ? "Líquido" : "Faturado";
 
 const diaData = (i) => new Date(BASE.getTime() + i * 86400000);
 const iso = (i) => { const d = diaData(i); return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0"); };
@@ -97,13 +105,25 @@ function inicioEm(T, d) { let lo = 0, hi = T.d.length; while (lo < hi) { const m
 /* ------------------------------------------------------------------ cálculo do recorte */
 function calcular() {
   const n = C.cod.length;
-  const venda = new Float64Array(n), ped = new Int32Array(n), comprou = new Uint8Array(n), uni = new Uint8Array(n);
+  const venda = new Float64Array(n), ped = new Float64Array(n), comprou = new Uint8Array(n), uni = new Uint8Array(n), dev = new Float64Array(n);
   const fat = new Float64Array(n), nfs = new Int32Array(n), fora = new Float64Array(n), moveu = new Uint8Array(n);
   const foraF = new Float64Array(n), vint = new Float64Array(n), fint = new Float64Array(n), temInt = new Uint8Array(n), soInt = new Uint8Array(n);
   const fs = S.sup.size, fr = S.rca.size;
   // Grupo do supervisor (g): 0 = equipe de venda (ES, BA, RJ), 1 = OPERAÇÃO INTERNA, 2 = outras equipes.
   // Só as equipes somam nos totais e contam o cliente como atendido. A operação interna é uma categoria à parte
   // (Júlio, 2026-11-16: "fica como OPERAÇÃO INTERNA, se ele quiser ver ele clica e aparece"), na venda e no faturado.
+  if (itemAtivo()) {
+    // Fornecedor/produto: [per, codcli, rca, sup, grupo, venda, devolução, qt]; venda = item de pedido faturado, "faturado" = venda − devolução
+    const linhas = IT && IT.chave === chaveItens() ? IT.cur : [];
+    for (const [, cod, r, s, g, v, dv, q] of linhas) {
+      if (fs && !S.sup.has(s)) continue;
+      if (fr && !S.rca.has(r)) continue;
+      const c = CIDX.get(cod); if (c == null) continue;
+      if (g === 1) { vint[c] += v; fint[c] += v - dv; temInt[c] = 1; continue; }
+      if (g) { fora[c] += v; foraF[c] += v - dv; continue; }
+      venda[c] += v; dev[c] += dv; fat[c] += v - dv; ped[c] += q; moveu[c] = 1; if (v > 0) comprou[c] = 1;
+    }
+  } else {
   // VENDA = Relatório 146 (pedido digitado, sem ST, todas as filiais).
   for (let i = inicioEm(V, S.d0), m = V.d.length; i < m && V.d[i] <= S.d1; i++) {
     if (fs && !S.sup.has(V.s[i])) continue;
@@ -121,6 +141,7 @@ function calcular() {
     if (g === 1) { fint[c] += FT.v[i]; temInt[c] = 1; continue; }
     if (g) { foraF[c] += FT.v[i]; continue; }
     fat[c] += FT.v[i]; nfs[c] += FT.n[i]; moveu[c] = 1;
+  }
   }
   const corte12 = FIM - 365;
   const cid = new Map();
@@ -144,7 +165,7 @@ function calcular() {
     let b = o.bairros.get(nb); if (!b) o.bairros.set(nb, (b = { nome: nb, venda: 0, fat: 0, fora: 0, foraF: 0, ped: 0, nfs: 0, cli: 0, at: 0, ids: [] }));
     b.cli++; b.venda += venda[i]; b.fat += fat[i]; b.fora += fora[i]; b.foraF += foraF[i]; b.ped += ped[i]; b.nfs += nfs[i]; if (comprou[i]) b.at++; b.ids.push(i);
   }
-  R = { venda, ped, comprou, uni, cid, fat, nfs, fora, foraF, vint, fint, temInt, soInt };
+  R = { venda, ped, comprou, uni, cid, fat, nfs, fora, foraF, vint, fint, temInt, soInt, dev };
 }
 function escopo() {                              // os números do recorte que está na tela: estado, município ou bairro
   const o = { venda: 0, fat: 0, fora: 0, foraF: 0, ped: 0, nfs: 0, cli: 0, at: 0, bai: 0, baiAt: 0, pop: 0, vInt: 0, fInt: 0, nInt: 0, ids: null, nome: "Espírito Santo" };
@@ -173,6 +194,18 @@ function escopo() {                              // os números do recorte que e
 function trecho(d0, d1) {                        // venda e faturado de outro período no mesmo recorte (filtros e lugar), para comparar
   if (d1 < 0) return null;
   const fs = S.sup.size, fr = S.rca.size;
+  if (itemAtivo()) {                               // o período de antes vem junto na leitura do fornecedor/produto
+    if (!IT || IT.chave !== chaveItens()) return null;
+    let v = 0, f = 0;
+    for (const [, cod, r, s, g, vv, dv] of IT.ant) {
+      if (g || (fs && !S.sup.has(s)) || (fr && !S.rca.has(r))) continue;
+      const c = CIDX.get(cod); if (c == null) continue;
+      if (S.cidade != null && C.ib[c] !== S.cidade) continue;
+      if (S.bairro != null && BAI(c) !== S.bairro) continue;
+      v += vv; f += vv - dv;
+    }
+    return { venda: v, fat: f };
+  }
   const somar = (T, soEquipe) => {
     let t = 0;
     for (let i = inicioEm(T, Math.max(0, d0)), m = T.d.length; i < m && T.d[i] <= d1; i++) {
@@ -266,6 +299,9 @@ function montarFiltros() {
     <button class="fx-btn ${nSup ? "on" : ""}" data-pop="sup">Supervisor ${nSup ? `<span class="n">${nSup}</span>` : ""}${IC.seta}</button>
     <button class="fx-btn ${nRca ? "on" : ""}" data-pop="rca">RCA ${nRca ? `<span class="n">${nRca}</span>` : ""}${IC.seta}</button>
     <button class="fx-btn ${cid ? "on" : ""}" data-pop="cidade">${cid ? esc(cid.nome) : "Cidade"} ${IC.seta}</button>
+    <button class="fx-btn ${S.forn.size ? "on" : ""}" data-pop="forn" title="Venda por fornecedor: a base da aba Fornecedor do app Supervisor Lube e da Análise Comercial">Fornecedor ${S.forn.size ? `<span class="n">${S.forn.size}</span>` : ""}${IC.seta}</button>
+    <button class="fx-btn ${S.prod.size ? "on" : ""}" data-pop="prod" title="${S.forn.size ? "Produtos dos fornecedores escolhidos" : "Todos os produtos com venda no estado"}">Produto ${S.prod.size ? `<span class="n">${S.prod.size}</span>` : ""}${IC.seta}</button>
+    <span class="fx-sep"></span>
     <button class="fx-btn ${S.bairro != null ? "on" : ""}" data-pop="bairro" title="${cid ? "Bairros de " + esc(cid.nome) : "Bairros de todos os municípios (escolher um abre o município)"}">${S.bairro != null ? esc(titulo(S.bairro)) : "Bairro"} ${IC.seta}</button>
     <span class="fx-sep"></span>
     <span class="fx-rot" title="Quem conta como cliente da base, além de quem comprou no período">Base</span>
@@ -274,7 +310,8 @@ function montarFiltros() {
       <button class="${S.base === "12m" ? "on" : ""}" data-base="12m" title="Última compra há menos de 12 meses">Compraram em 12 meses</button>
       <button class="${S.base === "todos" ? "on" : ""}" data-base="todos" title="Aptos + quem comprou nos últimos 24 meses">Todos</button>
     </span>
-    ${nSup || nRca || cid || S.rapido !== "mes" || S.base !== "aptos" ? `<button class="fx-limpar" id="f-limpar">Limpar filtros</button>` : ""}`;
+    ${nSup || nRca || cid || itemAtivo() || S.rapido !== "mes" || S.base !== "aptos" ? `<button class="fx-limpar" id="f-limpar">Limpar filtros</button>` : ""}
+    ${itemAtivo() ? `<span class="fx-aviso" title="A venda do Relatório 146 e a nota do Central Comercial não abrem por produto: com fornecedor ou produto, a venda é a do item de pedido faturado (regra do 146, sem ST) e, no lugar do faturado, venda − devolução. É a mesma base da aba Fornecedor do app Supervisor Lube e da Análise Comercial.">${document.body.classList.contains("lendo-itens") ? "Lendo a venda do fornecedor…" : "Venda por item · base da Análise Comercial"}</span>` : ""}`;
 }
 function ligarFiltros() {
   const fx = $("#faixa-filtros");
@@ -283,7 +320,7 @@ function ligarFiltros() {
     if (b.dataset.rap) { S.rapido = b.dataset.rap; [S.d0, S.d1] = periodoRapido(S.rapido); return refazer(); }
     if (b.dataset.base) { S.base = b.dataset.base; return refazer(); }
     if (b.id === "f-limpar") {
-      S.sup.clear(); S.rca.clear(); S.base = "aptos"; S.rapido = "mes"; [S.d0, S.d1] = periodoRapido("mes");
+      S.sup.clear(); S.rca.clear(); S.forn.clear(); S.prod.clear(); S.base = "aptos"; S.rapido = "mes"; [S.d0, S.d1] = periodoRapido("mes");
       if (S.cidade != null) { calcular(); return voltarEstado(); } return refazer();
     }
     if (b.dataset.pop === "sup") return abrirPop(b, { itens: D.sup.map(([k, t]) => ({ k, t: k + " · " + t })), sel: S.sup,
@@ -291,6 +328,19 @@ function ligarFiltros() {
     if (b.dataset.pop === "rca") return abrirPop(b, { itens: D.rca.filter((r) => !S.sup.size || S.sup.has(r[2])).map(([k, t]) => ({ k, t: k + " · " + t })), sel: S.rca, aoMudar: refazer });
     if (b.dataset.pop === "cidade") return abrirPop(b, { unico: true, itens: [...CID.values()].map((c) => ({ k: c.ibge, t: c.nome, n: R.cid.get(c.ibge).cli })),
       sel: new Set(S.cidade != null ? [S.cidade] : []), aoMudar: (sel) => { const k = [...sel][0]; k == null ? voltarEstado() : abrirCidade(k); } });
+    if (b.dataset.pop === "forn" || b.dataset.pop === "prod") {
+      const qual = b.dataset.pop;
+      const abrir = (L) => {
+        const botao = document.querySelector(`[data-pop="${qual}"]`); if (!botao) return;
+        if (qual === "forn") return abrirPop(botao, { itens: L.forn.map(([k, t, , n]) => ({ k, t: k + " · " + t, n })), sel: S.forn, unidade: "clientes",
+          aoMudar: () => { for (const p of [...S.prod]) { const x = L.prodDe.get(p); if (S.forn.size && (!x || !S.forn.has(x[2]))) S.prod.delete(p); } S.tbPag = 0; refazer(); } });
+        const lista = S.forn.size ? L.prod.filter((x) => S.forn.has(x[2])) : L.prod;
+        abrirPop(botao, { itens: lista.map(([k, t, f, , n]) => ({ k, t: k + " · " + t + (S.forn.size > 1 || !S.forn.size ? " — " + (L.nomeForn.get(f) || "") : ""), n })), sel: S.prod, aoMudar: () => { S.tbPag = 0; refazer(); } });
+      };
+      if (ITL) return abrir(ITL);
+      toast("Lendo os fornecedores e produtos do estado…");
+      return carregarLista().then(abrir).catch((e) => toast("Não consegui ler a lista: " + e.message, "erro"));
+    }
     if (b.dataset.pop === "bairro") {
       // Bairro só existe dentro de um município (o mesmo nome se repete em cidades diferentes): a chave é "ibge|bairro".
       // Com um município aberto, a lista é a dos bairros dele; sem município, a de todos, com o nome da cidade ao lado.
@@ -382,8 +432,8 @@ function desenharKpis() {
   if (!el.dataset.pronto) {
     el.dataset.pronto = 1;
     el.innerHTML =
-      k("heroi", "Total de vendas", IC.dinheiro, `<div class="val num" id="k-venda"></div>`, `<span id="k-venda-leg" style="display:contents"></span>`, `title="A venda do Relatório 146: pedido digitado, sem ST, todas as filiais, só as equipes de venda"`) +
-      k("info largo", "Faturado", IC.nota, `<div class="val num" id="k-fat"></div>`, `<span id="k-fat-leg" style="display:contents"></span>`, `title="O total líquido da aba ST do Central Comercial (venda − devolução sem ST), o mesmo FATURADO do app dos supervisores"`) +
+      k("heroi", `<span id="k-venda-rot">Total de vendas</span>`, IC.dinheiro, `<div class="val num" id="k-venda"></div>`, `<span id="k-venda-leg" style="display:contents"></span>`, `title="A venda do Relatório 146: pedido digitado, sem ST, todas as filiais, só as equipes de venda"`) +
+      k("info largo", `<span id="k-fat-rot">Faturado</span>`, IC.nota, `<div class="val num" id="k-fat"></div>`, `<span id="k-fat-leg" style="display:contents"></span>`, `title="O total líquido da aba ST do Central Comercial (venda − devolução sem ST), o mesmo FATURADO do app dos supervisores"`) +
       k("ok click", "Clientes atendidos", IC.pessoas, `<div class="val num"><span id="k-at"></span><small id="k-cli"></small></div>`, `<div class="barra-duo"><i id="k-at-b"></i></div><span id="k-at-leg"></span>`, `data-tb="com" title="Ver na lista os clientes com venda"`) +
       k("perigo click", "Clientes sem venda", IC.alerta, `<div class="val num" id="k-sv" style="color:var(--mp-nao)"></div>`, `<span id="k-sv-leg"></span>`, `data-tb="sem" title="Ver na lista os clientes sem venda"`) +
       k("", "Bairros atendidos", IC.casa, `<div class="val num"><span id="k-bat"></span><small id="k-bai"></small></div>`, `<div class="barra-duo"><i id="k-bat-b"></i></div><span id="k-bat-leg"></span>`) +
@@ -396,13 +446,20 @@ function desenharKpis() {
       S.tbFiltro = c.dataset.tb; S.tbPag = 0; desenharLista(); $("#sec-lista").scrollIntoView({ behavior: calmo ? "auto" : "smooth", block: "start" });
     });
   }
+  const it = itemAtivo();
+  const qtd = (v) => (v || 0).toLocaleString("pt-BR", { maximumFractionDigits: 3 });
+  $("#k-venda-rot").textContent = it ? "Venda do " + (S.prod.size ? (S.prod.size > 1 ? S.prod.size + " produtos" : "produto") : S.forn.size > 1 ? S.forn.size + " fornecedores" : "fornecedor") : "Total de vendas";
+  $("#k-fat-rot").textContent = it ? "Líquido (venda − devolução)" : "Faturado";
+  $("#k-venda").parentElement.title = it ? "Item de pedido faturado pela regra do Relatório 146 (sem ST, sem bonificação), pela data do pedido: a mesma base da aba Fornecedor do app Supervisor Lube e da Análise Comercial" : "A venda do Relatório 146: pedido digitado, sem ST, todas as filiais, só as equipes de venda";
+  $("#k-fat").parentElement.title = it ? "Venda do item menos a devolução sem ST (pela data da devolução): o sell out da Análise Comercial" : "O total líquido da aba ST do Central Comercial (venda − devolução sem ST), o mesmo FATURADO do app dos supervisores";
   contar($("#k-venda"), e.venda, "brl");
-  $("#k-venda-leg").innerHTML = `<span style="flex-basis:100%">${inteiro(e.ped)} pedidos${e.ped ? " · ticket " + brl(e.venda / e.ped) : ""}</span>${cmp}${Math.abs(e.fora) >= 0.005 ? `<span style="flex-basis:100%" title="Supervisor que não é equipe de venda nem operação interna: não entra nos totais, como no Relatório 146">Fora dos totais: ${brl(e.fora)} de outras equipes</span>` : ""}${foraMapa("venda")}`;
+  const perdIt = it && IT && IT.perdido && S.cidade == null && Math.abs(IT.perdido) >= 0.005 ? `<span style="flex-basis:100%;color:var(--atencao)">Fora do mapa: ${brl(IT.perdido)} de cliente sem cadastro no mapa</span>` : "";
+  $("#k-venda-leg").innerHTML = `<span style="flex-basis:100%">${it ? qtd(e.ped) + " unidades · pedido faturado" : inteiro(e.ped) + " pedidos" + (e.ped ? " · ticket " + brl(e.venda / e.ped) : "")}</span>${cmp}${Math.abs(e.fora) >= 0.005 ? `<span style="flex-basis:100%" title="Supervisor que não é equipe de venda nem operação interna: não entra nos totais, como no Relatório 146">Fora dos totais: ${brl(e.fora)} de outras equipes</span>` : ""}${it ? perdIt : foraMapa("venda")}`;
   contar($("#k-int"), e.vInt, "brl");
   $("#k-int").parentElement.classList.toggle("on", S.interna);
-  $("#k-int-leg").innerHTML = `<span style="flex-basis:100%">faturado ${brl(e.fInt)} · ${inteiro(e.nInt)} cliente${e.nInt === 1 ? "" : "s"} só por ela</span><span style="flex-basis:100%;font-weight:700;color:var(--mp-int)">${S.interna ? "Aparecendo no mapa e na lista · clique para esconder" : "Fora dos totais · clique para ver"}</span>`;
+  $("#k-int-leg").innerHTML = `<span style="flex-basis:100%">${it ? "líquido" : "faturado"} ${brl(e.fInt)} · ${inteiro(e.nInt)} cliente${e.nInt === 1 ? "" : "s"} só por ela</span><span style="flex-basis:100%;font-weight:700;color:var(--mp-int)">${S.interna ? "Aparecendo no mapa e na lista · clique para esconder" : "Fora dos totais · clique para ver"}</span>`;
   contar($("#k-fat"), e.fat, "brl");
-  $("#k-fat-leg").innerHTML = `<span style="flex-basis:100%">${inteiro(e.nfs)} notas · Central Comercial, aba ST</span>${cmpF}${Math.abs(e.foraF) >= 0.005 ? `<span style="flex-basis:100%" title="Supervisor que não é equipe de venda nem operação interna: não entra nos totais">Fora dos totais: ${brl(e.foraF)} de outras equipes</span>` : ""}${foraMapa("faturado")}`;
+  $("#k-fat-leg").innerHTML = `<span style="flex-basis:100%">${it ? "devolução " + brl(e.venda - e.fat) + " · base da Análise Comercial" : inteiro(e.nfs) + " notas · Central Comercial, aba ST"}</span>${cmpF}${Math.abs(e.foraF) >= 0.005 ? `<span style="flex-basis:100%" title="Supervisor que não é equipe de venda nem operação interna: não entra nos totais">Fora dos totais: ${brl(e.foraF)} de outras equipes</span>` : ""}${it ? "" : foraMapa("faturado")}`;
   contar($("#k-at"), e.at); $("#k-cli").textContent = "de " + inteiro(e.cli);
   $("#k-at-b").style.setProperty("--p", (e.cli ? 100 * e.at / e.cli : 0).toFixed(1) + "%");
   $("#k-at-leg").textContent = pct(e.cli ? e.at / e.cli : 0) + " da base";
@@ -488,7 +545,7 @@ function dicaCidade(ib) {
   const c = R.cid.get(ib);
   if (!c.cli) return `<div class="t">${esc(c.nome)}</div><div class="l"><span>Nenhum cliente na base</span></div>${linhaDica("População", inteiro(c.pop))}`;
   return `<div class="t">${esc(c.nome)}</div>
-    ${linhaDica("Venda", brl(c.venda), "var(--d1)")}${linhaDica("Faturado", brl(c.fat), "var(--info)")}
+    ${linhaDica("Venda", brl(c.venda), "var(--d1)")}${linhaDica(rotFat(), brl(c.fat), "var(--info)")}
     ${linhaDica("Clientes com venda", inteiro(c.at) + " de " + inteiro(c.cli), "var(--mp-com)")}
     ${linhaDica("Clientes sem venda", inteiro(c.cli - c.at) + " · " + pct((c.cli - c.at) / c.cli), "var(--mp-nao)")}
     ${linhaDica("Bairros com venda", [...c.bairros.values()].filter((b) => b.at).length + " de " + c.bairros.size)}
@@ -521,7 +578,7 @@ function desenharTopoMapa() {
        <span class="mapa-onde">${S.bairro != null ? esc(titulo(S.bairro)) : esc(c.nome)}<small>${S.bairro != null ? esc(c.nome) : inteiro(c.cli) + " clientes"}</small></span>
        <span class="seg"><button class="${S.camada === "clientes" ? "on" : ""}" data-cam="clientes">Clientes</button><button class="${S.camada === "bairros" ? "on" : ""}" data-cam="bairros">Bairros</button></span>
        <span class="seg"><button class="${S.ruas ? "on" : ""}" data-ruas="1" title="Mostrar as ruas (precisa de internet)">Ruas</button></span>`
-    : `<span class="seg">${[["venda", "Venda"], ["fat", "Faturado"], ["pct", "% de clientes atendidos"], ["hab", "Venda por habitante"]].map(([k, t]) => `<button class="${S.metrica === k ? "on" : ""}" data-met="${k}">${t}</button>`).join("")}</span>`;
+    : `<span class="seg">${[["venda", "Venda"], ["fat", rotFat()], ["pct", "% de clientes atendidos"], ["hab", "Venda por habitante"]].map(([k, t]) => `<button class="${S.metrica === k ? "on" : ""}" data-met="${k}">${t}</button>`).join("")}</span>`;
 }
 function desenharLegenda() {
   const el = $("#mapa-legenda");
@@ -529,7 +586,7 @@ function desenharLegenda() {
     const semAt = [...R.cid.values()].filter((c) => c.cli && (S.metrica === "fat" ? !c.at && c.fat <= 0 : !c.at)).length, vazios = [...R.cid.values()].filter((c) => !c.cli).length;
     const escala = S.metrica === "pct" ? CLASSES_PCT : [1, 2, 3, 4, 5].map((i) => cssVar("--mp-e" + i));
     const max = S.metrica === "venda" || S.metrica === "fat" ? curto(maxMetrica) : S.metrica === "pct" ? "100%" : brl(maxMetrica);
-    el.innerHTML = `<div class="lt">${{ venda: "Venda no período", fat: "Faturado no período", pct: "% de clientes atendidos", hab: "Venda por habitante" }[S.metrica]}</div>
+    el.innerHTML = `<div class="lt">${{ venda: "Venda no período", fat: rotFat() + " no período", pct: "% de clientes atendidos", hab: "Venda por habitante" }[S.metrica]}</div>
       <div class="escala">${escala.map((c) => `<i style="background:${c}"></i>`).join("")}</div>
       <div class="pontas"><span>${S.metrica === "pct" ? "0%" : "menor"}</span><span>${max}</span></div>
       <div class="li"><i class="q" style="background:var(--mp-sem)"></i>Sem atendimento no período<b>${semAt}</b></div>
@@ -599,9 +656,9 @@ function cartaoCliente(i) {
   return `<div class="cartao-cli"><div class="n">${esc(titulo(C.nome[i]))}</div>
     <div class="s">${C.cod[i]}${C.fant[i] ? " · " + esc(titulo(C.fant[i])) : ""}<br>${esc(titulo(BAI(i)))} · ${esc((CID.get(C.ib[i]) || { nome: "" }).nome)}</div>
     <div class="l"><span>Situação no período</span><b style="color:var(${R.soInt[i] ? "--mp-int" : com ? "--mp-com" : "--mp-nao"})">${R.soInt[i] ? "Operação interna" : com ? "Com venda" : "Sem venda"}</b></div>
-    ${com ? `<div class="l"><span>Venda</span><b>${brl(R.venda[i])}</b></div><div class="l"><span>Pedidos</span><b>${inteiro(R.ped[i])}</b></div>` : ""}
-    ${R.nfs[i] || R.fat[i] ? `<div class="l"><span>Faturado</span><b>${brl(R.fat[i])}</b></div>` : ""}
-    ${R.temInt[i] ? `<div class="l"><span>Operação interna · venda</span><b style="color:var(--mp-int)">${brl(R.vint[i])}</b></div><div class="l"><span>Operação interna · faturado</span><b style="color:var(--mp-int)">${brl(R.fint[i])}</b></div>` : ""}
+    ${com ? `<div class="l"><span>Venda</span><b>${brl(R.venda[i])}</b></div><div class="l"><span>${itemAtivo() ? "Unidades" : "Pedidos"}</span><b>${itemAtivo() ? R.ped[i].toLocaleString("pt-BR", { maximumFractionDigits: 3 }) : inteiro(R.ped[i])}</b></div>` : ""}
+    ${R.nfs[i] || R.fat[i] ? `<div class="l"><span>${rotFat()}</span><b>${brl(R.fat[i])}</b></div>` : ""}
+    ${R.temInt[i] ? `<div class="l"><span>Operação interna · venda</span><b style="color:var(--mp-int)">${brl(R.vint[i])}</b></div><div class="l"><span>Operação interna · ${rotFat().toLowerCase()}</span><b style="color:var(--mp-int)">${brl(R.fint[i])}</b></div>` : ""}
     ${Math.abs(R.fora[i]) >= 0.005 || Math.abs(R.foraF[i]) >= 0.005 ? `<div class="l"><span>Outras equipes (fora dos totais)</span><b>venda ${brl(R.fora[i])} · fat. ${brl(R.foraF[i])}</b></div>` : ""}
     <div class="l"><span>Última compra</span><b>${C.ult[i] != null ? dataBR(C.ult[i]) : "nunca"}</b></div>
     <div class="l"><span>RCA da carteira</span><b>${r != null ? r + " · " + esc(titulo(RCA_NOME.get(r) || "")) : "—"}</b></div>
@@ -664,7 +721,7 @@ function desenharLado() {
     const lista = [...R.cid.values()].filter((c) => c.cli).sort(ord);
     const mv = S.ordCid === "fat" ? "fat" : "venda", max = Math.max(1, ...lista.map((c) => c[mv]));
     el.innerHTML = `<div class="painel-cab"><div class="painel-tit"><h3>Municípios</h3><p>Clique para abrir no mapa</p></div>
-      <div class="painel-acoes"><span class="seg">${[["venda", "Venda"], ["fat", "Faturado"], ["sem", "Sem venda"], ["pct", "%"]].map(([k, t]) => `<button class="${S.ordCid === k ? "on" : ""}" data-ordcid="${k}">${t}</button>`).join("")}</span></div></div>
+      <div class="painel-acoes"><span class="seg">${[["venda", "Venda"], ["fat", rotFat()], ["sem", "Sem venda"], ["pct", "%"]].map(([k, t]) => `<button class="${S.ordCid === k ? "on" : ""}" data-ordcid="${k}">${t}</button>`).join("")}</span></div></div>
       <div class="painel-corpo">${lista.map((c, i) => `<button class="lin" data-cid="${c.ibge}" title="${esc(c.nome)} · venda ${brl(c.venda)} · faturado ${brl(c.fat)}">
         <span class="pos">${i + 1}</span><span class="nm">${esc(c.nome)}<small>${inteiro(c.at)} de ${inteiro(c.cli)} clientes com venda · ${pct(c.at / c.cli)}</small></span>
         ${S.ordCid === "venda" || S.ordCid === "fat" ? `<span class="vl">${curto(c[mv])}<small>${mv === "fat" ? "faturado" : "venda"}</small></span><span class="duo venda"><i style="--p:${Math.max(0, 100 * c[mv] / max).toFixed(1)}%"></i></span>`
@@ -679,7 +736,7 @@ function desenharLado() {
       <div class="painel-acoes"><span class="seg">${[["sem", "Sem venda"], ["venda", "Venda"], ["az", "A–Z"]].map(([k, t]) => `<button class="${S.ordBai === k ? "on" : ""}" data-ordbai="${k}">${t}</button>`).join("")}</span></div></div>
       <div class="trilha"><button data-volta="es">Espírito Santo</button>›<b>${esc(c.nome)}</b></div>
       <div class="lado-mini"><div class="v"><span>Com venda</span><b>${inteiro(c.at)} <small>clientes</small></b></div><div class="r"><span>Sem venda</span><b>${inteiro(c.cli - c.at)} <small>clientes</small></b></div>
-        <div><span>Venda</span><b>${curto(c.venda)}</b></div><div><span>Faturado</span><b>${curto(c.fat)}</b></div></div>
+        <div><span>Venda</span><b>${curto(c.venda)}</b></div><div><span>${rotFat()}</span><b>${curto(c.fat)}</b></div></div>
       <div class="painel-corpo">${lista.map((b, i) => `<button class="lin" data-bai="${esc(b.nome)}" title="${esc(titulo(b.nome))} · ${brl(b.venda)}">
         <span class="pos">${i + 1}</span><span class="nm">${esc(titulo(b.nome))}<small>${inteiro(b.at)} de ${inteiro(b.cli)} com venda · ${curto(b.venda)}</small></span>
         ${b.cli - b.at ? `<span class="vl nao">${inteiro(b.cli - b.at)}<small>sem venda</small></span>` : `<span class="vl com">100%</span>`}
@@ -693,7 +750,7 @@ function desenharLado() {
   el.innerHTML = `<div class="painel-cab"><div class="painel-tit"><h3>${esc(titulo(b.nome))}</h3><p>${inteiro(b.cli)} clientes · os sem venda primeiro${ints.length ? " · + " + inteiro(ints.length) + " só operação interna" : ""}</p></div></div>
     <div class="trilha"><button data-volta="es">Espírito Santo</button>›<button data-volta="cid">${esc(c.nome)}</button>›<b>${esc(titulo(b.nome))}</b></div>
     <div class="lado-mini"><div class="v"><span>Com venda</span><b>${inteiro(b.at)}</b></div><div class="r"><span>Sem venda</span><b>${inteiro(b.cli - b.at)}</b></div>
-      <div><span>Venda</span><b>${curto(b.venda)}</b></div><div><span>Faturado</span><b>${curto(b.fat)}</b></div></div>
+      <div><span>Venda</span><b>${curto(b.venda)}</b></div><div><span>${rotFat()}</span><b>${curto(b.fat)}</b></div></div>
     <div class="painel-corpo">${ids.map((i) => `<button class="lin" data-cli="${i}" title="${esc(titulo(C.nome[i]))}">
       <span class="bola ${R.soInt[i] ? "int" : R.comprou[i] ? "com" : ""} ${C.loc[i] === 2 ? "aprox" : !C.loc[i] ? "sem" : ""}"></span>
       <span class="nm">${esc(titulo(C.nome[i]))}<small>${C.cod[i]} · última compra ${C.ult[i] != null ? dataBR(C.ult[i]) : "nunca"}</small></span>
@@ -757,10 +814,10 @@ function desenharLista() {
       <label class="tb-busca">${IC.busca}<input id="tb-busca" type="search" placeholder="Buscar cliente, código, bairro ou cidade…" value="${esc(S.tbBusca)}" autocomplete="off" spellcheck="false" style="background:transparent;border:0;outline:0;color:var(--t1);font:500 13px var(--f-txt);width:290px"></label>
       <span class="seg">${[["todos", "Todos"], ["com", "Com venda"], ["sem", "Sem venda"], ["int", "Operação interna"]].map(([k, t]) => `<button class="${S.tbFiltro === k ? "on" : ""}" data-tbf="${k}">${t}</button>`).join("")}</span>
     </div>
-    <div class="tb-totais"><div class="t g"><span>Venda</span><b class="num">${brl(tot)}</b></div><div class="t"><span>Faturado</span><b class="num" style="color:var(--info)">${brl(totF)}</b></div><div class="t"><span>Clientes</span><b class="num">${inteiro(ids.length - nInt)}</b></div>
+    <div class="tb-totais"><div class="t g"><span>Venda</span><b class="num">${brl(tot)}</b></div><div class="t"><span>${rotFat()}</span><b class="num" style="color:var(--info)">${brl(totF)}</b></div><div class="t"><span>Clientes</span><b class="num">${inteiro(ids.length - nInt)}</b></div>
       <div class="t"><span>Com venda</span><b class="num" style="color:var(--mp-com)">${inteiro(com)}</b></div><div class="t"><span>Sem venda</span><b class="num" style="color:var(--mp-nao)">${inteiro(ids.length - com - nInt)}</b></div>
       ${S.interna && (nInt || Math.abs(vInt) >= 0.005) ? `<div class="t" title="Fora dos totais de venda e de faturado"><span>Operação interna</span><b class="num" style="color:var(--mp-int)">${curto(vInt)} · ${inteiro(nInt)} só por ela</b></div>` : ""}</div>
-    <div class="tb-wrap"><table class="tabela"><thead><tr>${COLS.map((c) => `<th class="ord ${c.num ? "num" : ""}" data-ord="${c.k}">${c.t}${S.tbOrd === c.k ? (S.tbDir < 0 ? " ▼" : " ▲") : ""}</th>`).join("")}</tr></thead>
+    <div class="tb-wrap"><table class="tabela"><thead><tr>${COLS.map((c) => `<th class="ord ${c.num ? "num" : ""}" data-ord="${c.k}">${c.k === "ped" && itemAtivo() ? "Unidades" : c.k === "fat" ? rotFat() : c.t}${S.tbOrd === c.k ? (S.tbDir < 0 ? " ▼" : " ▲") : ""}</th>`).join("")}</tr></thead>
       <tbody>${pag.map((i) => `<tr class="click" data-cli="${i}" title="Ver no mapa">
         <td>${marcar((CID.get(C.ib[i]) || { nome: "" }).nome, q)}</td><td>${marcar(titulo(BAI(i)), q)}</td>
         <td><span class="cod">${marcar(String(C.cod[i]), q)}</span>${marcar(titulo(C.nome[i]), q)}</td>
@@ -768,7 +825,7 @@ function desenharLista() {
         <td class="num">${C.ult[i] != null ? dataBR(C.ult[i]) : "—"}</td>
         <td><span class="tag ${R.soInt[i] ? "int" : R.comprou[i] ? "com" : "nao"}">${R.soInt[i] ? "Operação interna" : R.comprou[i] ? "Com venda" : "Sem venda"}</span></td>
         ${R.soInt[i] ? `<td class="num"></td><td class="num" style="color:var(--mp-int)" title="Operação interna: fora do total">${brl(R.vint[i])}</td><td class="num" style="color:var(--mp-int)" title="Operação interna: fora do total">${brl(R.fint[i])}</td>`
-          : `<td class="num">${R.ped[i] || ""}</td><td class="num">${R.comprou[i] ? brl(R.venda[i]) : "—"}</td><td class="num">${R.nfs[i] || R.fat[i] ? brl(R.fat[i]) : "—"}</td>`}</tr>`).join("") || `<tr><td colspan="9"><div class="vazio"><b>Nenhum cliente no recorte</b>Mude a busca ou os filtros.</div></td></tr>`}</tbody></table></div>
+          : `<td class="num">${R.ped[i] ? R.ped[i].toLocaleString("pt-BR", { maximumFractionDigits: 3 }) : ""}</td><td class="num">${R.comprou[i] ? brl(R.venda[i]) : "—"}</td><td class="num">${R.nfs[i] || R.fat[i] ? brl(R.fat[i]) : "—"}</td>`}</tr>`).join("") || `<tr><td colspan="9"><div class="vazio"><b>Nenhum cliente no recorte</b>Mude a busca ou os filtros.</div></td></tr>`}</tbody></table></div>
     <div class="tb-pe"><span>${inteiro(ids.length - nInt)} clientes${nInt ? " + " + inteiro(nInt) + " só operação interna" : ""} · página ${S.tbPag + 1} de ${pags}</span>
       <span class="pg"><button class="mini-btn" data-pg="-1" ${S.tbPag ? "" : "disabled"}>Anterior</button><button class="mini-btn" data-pg="1" ${S.tbPag < pags - 1 ? "" : "disabled"}>Próxima</button>
       <select id="tb-tam">${[25, 50, 100, 500].map((n) => `<option ${S.tbTam === n ? "selected" : ""}>${n}</option>`).join("")}</select></span></div>`;
@@ -797,17 +854,24 @@ function filtrosTexto() {
     ["Supervisor", S.sup.size ? [...S.sup].map((s) => s + " " + (SUP_NOME.get(s) || "")).join("; ") : "Todos"],
     ["RCA", S.rca.size ? [...S.rca].map((r) => r + " " + (RCA_NOME.get(r) || "")).join("; ") : "Todos"],
     ["Base de clientes", { aptos: "Aptos a comprar (sem bloqueio, com limite) + quem comprou no período", "12m": "Compraram nos últimos 12 meses + quem comprou no período", todos: "Todos (aptos ou com compra em 24 meses)" }[S.base]],
+  ].concat(itemAtivo() ? [
+    ["Fornecedor", S.forn.size ? [...S.forn].map((f) => f + " " + ((ITL && ITL.nomeForn.get(f)) || "")).join("; ") : "Todos"],
+    ["Produto", S.prod.size ? [...S.prod].map((p) => p + " " + ((ITL && ITL.prodDe.get(p) || [])[1] || "")).join("; ") : "Todos"],
+    ["Venda", "Item de pedido faturado pela regra do Relatório 146 (sem ST, sem bonificação), pela data do pedido: a base da aba Fornecedor do app Supervisor Lube e da Análise Comercial"],
+    ["Líquido", "Venda do item − devolução sem ST (pela data da devolução)"],
+  ] : [
     ["Venda", "A do Relatório 146: pedido digitado, sem ST, todas as filiais, só as equipes de venda; cliente do ES"],
     ["Faturado", "O total líquido da aba ST do Central Comercial (venda − devolução sem ST), o mesmo do app dos supervisores"],
+  ]).concat([
     ["Operação interna", "Fora dos totais de venda e de faturado" + (S.interna ? "; os clientes que só compraram por ela estão na lista, com os valores em colunas próprias" : "; não listada")],
-    ["Lista", { todos: "Todos os clientes", com: "Só com venda", sem: "Só sem venda", int: "Só operação interna" }[S.tbFiltro] + (S.tbBusca.trim() ? ' · busca "' + S.tbBusca.trim() + '"' : "")]];
+    ["Lista", { todos: "Todos os clientes", com: "Só com venda", sem: "Só sem venda", int: "Só operação interna" }[S.tbFiltro] + (S.tbBusca.trim() ? ' · busca "' + S.tbBusca.trim() + '"' : "")]]);
 }
 function excel() {
   if (!window.Planilha) return toast("Excel indisponível", "erro");
   const ids = linhasLista(); let tot = 0, totF = 0, com = 0, nInt = 0; for (const i of ids) { tot += R.venda[i]; totF += R.fat[i]; com += R.comprou[i]; nInt += R.soInt[i]; }
   Planilha.baixar({
     arquivo: "Mapa de Vendas ES - clientes " + iso(S.d0) + " a " + iso(S.d1), titulo: "Mapa de Vendas · Espírito Santo", subtitulo: "Clientes por cidade e bairro", aba: "Clientes",
-    filtros: filtrosTexto(), resumo: [["Venda", tot, "moeda"], ["Faturado", totF, "moeda"], ["Clientes", ids.length - nInt, "inteiro"], ["Com venda", com, "inteiro"], ["Sem venda", ids.length - com - nInt, "inteiro"]].concat(nInt ? [["Só operação interna", nInt, "inteiro"]] : []),
+    filtros: filtrosTexto(), resumo: [["Venda", tot, "moeda"], [rotFat(), totF, "moeda"], ["Clientes", ids.length - nInt, "inteiro"], ["Com venda", com, "inteiro"], ["Sem venda", ids.length - com - nInt, "inteiro"]].concat(nInt ? [["Só operação interna", nInt, "inteiro"]] : []),
     colunas: [
       { titulo: "Cidade", tipo: "texto", valor: (i) => (CID.get(C.ib[i]) || { nome: "" }).nome },
       { titulo: "Bairro", tipo: "texto", valor: (i) => BAI(i) },
@@ -818,11 +882,11 @@ function excel() {
       { titulo: "Nome do RCA", tipo: "texto", valor: (i) => RCA_NOME.get(C.rca[i]) || "" },
       { titulo: "Última compra", tipo: "data", valor: (i) => C.ult[i] != null ? iso(C.ult[i]) : null },
       { titulo: "Situação", tipo: "texto", valor: (i) => R.soInt[i] ? "Operação interna" : R.comprou[i] ? "Com venda" : "Sem venda" },
-      { titulo: "Pedidos", tipo: "inteiro", somar: true, valor: (i) => R.ped[i] },
+      itemAtivo() ? { titulo: "Unidades", tipo: "decimal", somar: true, valor: (i) => R.ped[i] } : { titulo: "Pedidos", tipo: "inteiro", somar: true, valor: (i) => R.ped[i] },
       { titulo: "Venda", tipo: "moeda", somar: true, valor: (i) => R.venda[i] },
-      { titulo: "Faturado", tipo: "moeda", somar: true, valor: (i) => R.fat[i] },
+      { titulo: rotFat(), tipo: "moeda", somar: true, valor: (i) => R.fat[i] },
       { titulo: "Venda op. interna", tipo: "moeda", somar: true, valor: (i) => R.vint[i] },
-      { titulo: "Faturado op. interna", tipo: "moeda", somar: true, valor: (i) => R.fint[i] },
+      { titulo: rotFat() + " op. interna", tipo: "moeda", somar: true, valor: (i) => R.fint[i] },
     ],
     linhas: ids, rodape: "Mapa de Vendas ES · Lube Distribuidora · gerado em " + new Date().toLocaleString("pt-BR"),
   }).then(() => toast("Planilha gerada", "ok")).catch((e) => toast("Erro no Excel: " + e.message, "erro"));
@@ -836,7 +900,51 @@ function alternarInterna() {                     // a operação interna aparece
 }
 
 /* ------------------------------------------------------------------ ciclo */
+function chaveItens() {
+  const [p0, p1] = periodoAnterior();
+  return [[...S.forn].sort().join(","), [...S.prod].sort().join(","), S.d0, S.d1, p0, p1].join("|");
+}
+async function carregarItens() {                  // a venda do fornecedor/produto no período e no de antes (para a comparação)
+  const chave = chaveItens();
+  if (IT && IT.chave === chave) return;
+  if (IT_PEDIDO && IT_PEDIDO.chave === chave) return IT_PEDIDO.p;
+  const [p0, p1] = periodoAnterior();
+  const q = new URLSearchParams({ uf: "ES", de: iso(S.d0), ate: iso(S.d1) });
+  if (S.forn.size) q.set("forn", [...S.forn].join(","));
+  if (S.prod.size) q.set("prod", [...S.prod].join(","));
+  if (p1 >= 0) { q.set("de2", iso(Math.max(0, p0))); q.set("ate2", iso(p1)); }   // como na conta sem filtro: o pacote começa em 01/01/2025
+  const p = (async () => {
+    const r = await fetch("api/itens?" + q, { cache: "no-store" });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(j.mensagem || "HTTP " + r.status);
+    const cur = [], ant = []; let perdido = 0;
+    for (const l of j.linhas) { (l[0] ? ant : cur).push(l); if (!l[0] && !CIDX.has(l[1])) perdido += l[5]; }
+    IT = { chave, cur, ant, perdido };
+  })();
+  IT_PEDIDO = { chave, p };
+  try { await p; } finally { if (IT_PEDIDO && IT_PEDIDO.chave === chave) IT_PEDIDO = null; }
+}
+async function carregarLista() {
+  if (ITL) return ITL;
+  if (!ITL_PEDIDO) ITL_PEDIDO = fetch("api/itens?lista=1&uf=ES", { cache: "no-store" }).then(async (r) => {
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(j.mensagem || "HTTP " + r.status);
+    ITL = j; ITL.nomeForn = new Map(j.forn.map((f) => [f[0], f[1]])); ITL.prodDe = new Map(j.prod.map((x) => [x[0], x]));
+    return ITL;
+  }).finally(() => { ITL_PEDIDO = null; });
+  return ITL_PEDIDO;
+}
+let lendoItens = 0;
 function refazer() {
+  if (itemAtivo() && !(IT && IT.chave === chaveItens())) {
+    const chave = chaveItens(), marca = ++lendoItens;
+    document.body.classList.add("lendo-itens"); $("#btn-atualizar").classList.add("girando");
+    montarFiltros();
+    const fim = () => { document.body.classList.remove("lendo-itens"); if (!atualizando) $("#btn-atualizar").classList.remove("girando"); };
+    carregarItens().then(() => { if (marca === lendoItens) { fim(); if (chave === chaveItens()) refazer(); } })
+      .catch((e) => { if (marca !== lendoItens) return; fim(); toast("Não consegui ler a venda do fornecedor/produto: " + e.message, "erro"); S.forn.clear(); S.prod.clear(); refazer(); });
+    return;
+  }
   calcular();
   if (S.bairro != null && !(R.cid.get(S.cidade).bairros.has(S.bairro))) S.bairro = null;
   montarFiltros(); desenharKpis(); pintarMapa(); desenharPontos(); desenharLado(); desenharLista();
@@ -857,7 +965,8 @@ async function buscarDados(fresco) {
   }
 }
 function aplicarDados(d) {
-  D = d; C = d.cli; V = d.ven; FT = d.fat;
+  D = d; C = d.cli; V = d.ven; FT = d.fat; IT = null;
+  CIDX.clear(); C.cod.forEach((c, i) => CIDX.set(c, i));
   BASE = new Date(D.baseDia + "T00:00:00"); FIM = indice(D.periodo.fim);
   SUP_NOME.clear(); RCA_NOME.clear(); RCA_SUP.clear();
   for (const [k, t] of D.sup) SUP_NOME.set(k, t);
@@ -903,6 +1012,7 @@ async function iniciar() {
   criarMapa(); ligarMapa(); ligarLado(); ligarLista();
   desenharKpis(); pintarMapa(); desenharLado(); desenharLista();
   setInterval(() => atualizarDados(false), RELER_MS);              // a tela relê o banco sozinha
+  setTimeout(() => carregarLista().catch(() => {}), 2500);           // a lista de fornecedores e produtos (~6 s no banco) fica pronta antes do clique
   document.addEventListener("visibilitychange", () => { if (!document.hidden && Date.now() - ultimaLeitura > RELER_MS) atualizarDados(false); });
   window.__mapa = { S, get R() { return R; }, get D() { return D; }, abrirCidade, abrirBairro, voltarEstado, escopo, refazer, atualizarDados };   // para conferência no console
 }

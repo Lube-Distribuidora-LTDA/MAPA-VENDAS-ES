@@ -29,7 +29,7 @@ if (arquivoEnv) {
 } else console.error("Aviso: não achei o arquivo ENV; sem a senha do banco a tela abre com a cópia guardada em dados/mapa.json.");
 process.env.SUPABASE_DB_PORT = process.env.SUPABASE_DB_PORT || "5432";
 
-const rotas = { "/api/dados": require(path.join(WEB, "api", "dados.js")) };
+const rotas = { "/api/dados": require(path.join(WEB, "api", "dados.js")), "/api/itens": require(path.join(WEB, "api", "itens.js")) };
 const TIPOS = {
   ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8",
   ".png": "image/png", ".svg": "image/svg+xml", ".json": "application/json; charset=utf-8", ".woff2": "font/woff2", ".webp": "image/webp",

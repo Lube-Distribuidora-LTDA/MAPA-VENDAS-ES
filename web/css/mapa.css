@@ -163,3 +163,7 @@
 @media (max-width: 1280px) { .palco { grid-template-columns: minmax(0, 1fr); } .lado { height: auto; max-height: 560px; } }
 @media (max-width: 720px) { #conteudo { padding: 12px 12px 30px; } .mapa-caixa { height: 480px; } .atualizado { display: none; } }
 @media (prefers-reduced-motion: reduce) { .leaflet-interactive, .rot-bairro, .kpi .barra-duo i, .lin .duo i { transition: none; animation: none; } }
+
+/* fornecedor / produto: a base muda (item de pedido faturado), e isso fica dito na faixa */
+.fx-aviso { flex-basis: 100%; font: 600 11.5px var(--f-txt); color: var(--atencao); padding: 2px 4px 0; cursor: help; }
+body.lendo-itens #kpis, body.lendo-itens .mapa-caixa, body.lendo-itens #lado, body.lendo-itens #sec-lista { opacity: .55; transition: opacity .2s; }
