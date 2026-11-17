@@ -3,6 +3,7 @@
 O painel "LUBE ES" (mapa de vendas do Espírito Santo) recriado com a identidade da Lube. Pedido do Júlio em 2026-11-16.
 **Bahia no mesmo mapa desde 2026-11-17** (Júlio: "divide apenas assim: ES e BAHIA; quando clicar vem um zoom e abre o
 mapa do estado"): a tela abre com os dois estados; o clique num deles abre o mapa dele. Link direto: `?uf=ES` ou `?uf=BA`.
+Os filtros valem também com os dois estados na tela (somam ES e BA; cidade ou bairro abre o estado dela) e seguem ao trocar de estado.
 **Filtros Fornecedor e Produto desde 2026-11-17** (ver abaixo).
 **No ar desde 2026-11-16** em https://mapa-vendas-es.vercel.app, fechado pela Sentinela (só entra quem tem acesso pelo\nPainel Lube; cartão em COMERCIAL). Na máquina: `INICIAR.bat` (http://localhost:3115).
 
